@@ -1,0 +1,7 @@
+/target
+
+# No python in the project, but useful to have for reference
+*.py
+
+# artifacts
+artifacts*
