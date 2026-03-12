@@ -81,6 +81,7 @@ fn find_best_unused_neighbor(
     (best_idx, best_dev)
 }
 
+#[derive(Debug, Clone)]
 pub struct AlignedFrame {
     pub label: ImageLabel,
     pub left_eye: ImageData,

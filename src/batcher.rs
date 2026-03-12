@@ -1,20 +1,10 @@
 use burn::{
     Tensor,
-    data::{
-        dataloader::batcher::Batcher,
-        dataset::{Dataset, DatasetIterator},
-    },
+    data::{dataloader::batcher::Batcher, dataset::transform::Mapper},
     prelude::Backend,
-    tensor::backend::AutodiffBackend,
 };
 
-use crate::{frame_correlator::AlignedFrame, loader::ImageLabel};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EyeSide {
-    Left,
-    Right,
-}
+use crate::{ImageData, frame_correlator::AlignedFrame, loader::ImageLabel};
 
 #[derive(Clone, Debug)]
 pub struct DatasetInfo {
@@ -90,7 +80,6 @@ impl DatasetInfo {
 #[derive(Clone)]
 pub struct EyeDataBatcher {
     pub training: bool,
-    pub side: EyeSide,
     pub dataset_info: DatasetInfo,
 }
 
@@ -101,148 +90,64 @@ pub struct EyeDataBatch<B: Backend> {
 }
 
 #[derive(Clone, Debug)]
-pub struct WindowedFrame<B: Backend> {
+pub struct WindowedFrame {
     pub label: ImageLabel,
-    pub left_eye: [Tensor<B, 2>; 4],
-    pub right_eye: [Tensor<B, 2>; 4],
+    pub left_eye: [ImageData; 4],
+    pub right_eye: [ImageData; 4],
     pub timestamp: u64,
 }
 
-impl<B: Backend> WindowedFrame<B> {
-    pub fn from_aligned_frames(
-        aligned: &[AlignedFrame],
-        device: &B::Device,
-    ) -> Vec<WindowedFrame<B>> {
-        aligned
-            .windows(4)
-            .map(|w| {
-                let process_frame_left = |f: &AlignedFrame| {
-                    let (height, width) = f.left_eye.dimensions();
-                    Tensor::<B, 1>::from_data(&f.left_eye.as_raw()[..], device)
-                        .reshape([height, width])
-                };
+pub struct ImageToTensor;
 
-                let process_frame_right = |f: &AlignedFrame| {
-                    let (height, width) = f.right_eye.dimensions();
-                    Tensor::<B, 1>::from_data(&f.right_eye.as_raw()[..], device)
-                        .reshape([height, width])
-                };
-
-                WindowedFrame {
-                    label: w.last().unwrap().label.clone(),
-                    left_eye: [
-                        process_frame_left(&w[0]),
-                        process_frame_left(&w[1]),
-                        process_frame_left(&w[2]),
-                        process_frame_left(&w[3]),
-                    ],
-                    right_eye: [
-                        process_frame_right(&w[0]),
-                        process_frame_right(&w[1]),
-                        process_frame_right(&w[2]),
-                        process_frame_right(&w[3]),
-                    ],
-                    timestamp: w.last().unwrap().timestamp,
-                }
-            })
-            .collect()
-    }
-}
-
-impl<B: Backend> WindowedFrame<B> {
-    pub fn to_backend<C: Backend>(&self, device: &C::Device) -> WindowedFrame<C> {
+impl Mapper<Vec<AlignedFrame>, WindowedFrame> for ImageToTensor {
+    /// Converts a windowed vector of frames into a
+    fn map(&self, item: &Vec<AlignedFrame>) -> WindowedFrame {
         WindowedFrame {
-            label: self.label.clone(),
+            label: item.last().unwrap().label.clone(),
             left_eye: [
-                Tensor::from_data(self.left_eye[0].to_data(), device),
-                Tensor::from_data(self.left_eye[1].to_data(), device),
-                Tensor::from_data(self.left_eye[2].to_data(), device),
-                Tensor::from_data(self.left_eye[3].to_data(), device),
+                item[0].left_eye.clone(),
+                item[1].left_eye.clone(),
+                item[2].left_eye.clone(),
+                item[3].left_eye.clone(),
             ],
             right_eye: [
-                Tensor::from_data(self.right_eye[0].to_data(), device),
-                Tensor::from_data(self.right_eye[1].to_data(), device),
-                Tensor::from_data(self.right_eye[2].to_data(), device),
-                Tensor::from_data(self.right_eye[3].to_data(), device),
+                item[0].right_eye.clone(),
+                item[1].right_eye.clone(),
+                item[2].right_eye.clone(),
+                item[3].right_eye.clone(),
             ],
-            timestamp: self.timestamp,
+            timestamp: item.last().unwrap().timestamp,
         }
     }
 }
 
-fn apply_spatial_transform<B: Backend>(
-    image: &Tensor<B, 3>,
+fn apply_spatial_transform(
+    image: [ImageData; 8],
     max_shift: i32,
     max_rotation: f32,
     max_scale: f32,
-) -> Tensor<B, 3> {
+) -> [ImageData; 8] {
     // Placeholder for actual spatial transformation logic
     image.clone()
 }
 
-fn apply_intensity_transformation<B: Backend>(
-    image: &Tensor<B, 3>,
+fn apply_intensity_transformation(
+    image: [ImageData; 8],
     brightness_range: f32,
     contrast_range: f32,
-) -> Tensor<B, 3> {
+) -> [ImageData; 8] {
     // Placeholder for actual intensity transformation logic
     image.clone()
 }
 
-fn apply_blur<B: Backend>(image: &Tensor<B, 3>, max_kernel_size: i32) -> Tensor<B, 3> {
+fn apply_blur(image: [ImageData; 8], max_kernel_size: i32) -> [ImageData; 8] {
     // Placeholder for actual blur transformation logic
     image.clone()
 }
 
-impl<B: Backend> Batcher<B, WindowedFrame<B>, EyeDataBatch<B>> for EyeDataBatcher {
-    fn batch(&self, items: Vec<WindowedFrame<B>>, device: &B::Device) -> EyeDataBatch<B> {
-        let images = items
-            .iter()
-            .map(|item| {
-                // let mut image = match self.side {
-                //     EyeSide::Left => item.left_eye.clone(),
-                //     EyeSide::Right => item.right_eye.clone(),
-                // };
-                // Intersperse Left and Right channels, with Left channels in even indices and Right channels in odd indices
-                let image = Tensor::cat(
-                    vec![
-                        item.left_eye[0].clone().reshape([1, 0, -1]),
-                        item.right_eye[0].clone().reshape([1, 0, -1]),
-                        item.left_eye[1].clone().reshape([1, 0, -1]),
-                        item.right_eye[1].clone().reshape([1, 0, -1]),
-                        item.left_eye[2].clone().reshape([1, 0, -1]),
-                        item.right_eye[2].clone().reshape([1, 0, -1]),
-                        item.left_eye[3].clone().reshape([1, 0, -1]),
-                        item.right_eye[3].clone().reshape([1, 0, -1]),
-                    ],
-                    0,
-                );
-
-                if self.training {
-                    if rand::random::<f32>() < 0.2 {
-                        // image = apply_spatial_transform(&image, 24, 10.0, 0.1);
-                    }
-
-                    if rand::random::<f32>() < 0.3 {
-                        // image = apply_intensity_transformation(&image, 0.1, 0.5);
-                    }
-
-                    if rand::random::<f32>() < 0.2 {
-                        // image = apply_blur(&image, 5);
-                    }
-
-                    image.to_device(device)
-                } else {
-                    image.to_device(device)
-                }
-            })
-            .map(|tensor| {
-                let [channels, height, width] = tensor.dims();
-
-                tensor.reshape([1, channels, height, width])
-            })
-            .collect();
-
+impl<B: Backend> Batcher<B, WindowedFrame, EyeDataBatch<B>> for EyeDataBatcher {
+    fn batch(&self, mut items: Vec<WindowedFrame>, device: &B::Device) -> EyeDataBatch<B> {
+        // Pull these out first so that we can pull the image buffers out without copies
         let targets = items
             .iter()
             .map(|item| {
@@ -290,6 +195,50 @@ impl<B: Backend> Batcher<B, WindowedFrame<B>, EyeDataBatch<B>> for EyeDataBatche
                 );
             })
             .map(|tensor| tensor.reshape([1, -1]))
+            .collect();
+
+        let images = items
+            .drain(..)
+            .map(|item| {
+                let [l_0, l_1, l_2, l_3] = item.left_eye;
+                let [r_0, r_1, r_2, r_3] = item.right_eye;
+
+                // Intersperse Left and Right channels, with Left channels in even indices and Right channels in odd indices
+                let mut image = [l_0, r_0, l_1, r_1, l_2, r_2, l_3, r_3];
+
+                if self.training {
+                    if rand::random::<f32>() < 0.2 {
+                        image = apply_spatial_transform(image, 24, 10.0, 0.1);
+                    }
+
+                    if rand::random::<f32>() < 0.3 {
+                        image = apply_intensity_transformation(image, 0.1, 0.5);
+                    }
+
+                    if rand::random::<f32>() < 0.2 {
+                        image = apply_blur(image, 5);
+                    }
+                }
+
+                Tensor::stack(
+                    image
+                        .iter()
+                        .map(|img| {
+                            let data = img.as_raw();
+                            let height = img.height() as usize;
+                            let width = img.width() as usize;
+
+                            Tensor::<B, 1>::from_data(&data[..], device).reshape([width, height])
+                        })
+                        .collect(),
+                    0,
+                )
+            })
+            .map(|tensor| {
+                let [channels, height, width] = tensor.dims();
+
+                tensor.reshape([1, channels, height, width])
+            })
             .collect();
 
         let images = Tensor::cat(images, 0);

@@ -1,20 +1,23 @@
 use burn::{
-    data::{dataloader::DataLoaderBuilder, dataset::InMemDataset},
+    data::{
+        dataloader::DataLoaderBuilder,
+        dataset::{
+            Dataset, InMemDataset,
+            transform::{MapperDataset, PartialDataset, ShuffledDataset, WindowsDataset},
+        },
+    },
     module::Module,
     optim::AdamConfig,
     prelude::Config,
     record::CompactRecorder,
     tensor::backend::AutodiffBackend,
-    train::{
-        Learner, SupervisedTraining,
-        metric::{AccuracyMetric, LossMetric},
-    },
+    train::{Learner, SupervisedTraining, metric::LossMetric},
 };
 
 use crate::{
-    batcher::{DatasetInfo, EyeDataBatcher, EyeSide, WindowedFrame},
+    batcher::{DatasetInfo, EyeDataBatcher, ImageToTensor},
     frame_correlator::AlignedFrame,
-    models::{MicroChadConfig, MultiInputMergedMicroChad, MultiInputMergedMicroChadConfig},
+    models::MultiInputMergedMicroChadConfig,
 };
 
 #[derive(Config, Debug)]
@@ -56,16 +59,24 @@ pub fn train<B: AutodiffBackend>(
 
     let batcher = EyeDataBatcher {
         training: true,
-        side: EyeSide::Left,
         dataset_info,
     };
 
-    let frames = WindowedFrame::from_aligned_frames(&frames, &device);
-    let (train, test) = frames.split_at(frames.len() * 80 / 100);
+    let get_data = |frames, start, end| {
+        let frames = ShuffledDataset::new(
+            WindowsDataset::new(InMemDataset::new(frames), 4),
+            config.seed,
+        );
+        let len = frames.len();
 
-    let dataset_train = InMemDataset::new(train.to_vec());
-    let dataset_test: InMemDataset<WindowedFrame<B::InnerBackend>> =
-        InMemDataset::new(test.iter().map(|f| f.to_backend(&device)).collect());
+        MapperDataset::new(
+            PartialDataset::new(frames, len * start / 10, len * end / 10),
+            ImageToTensor,
+        )
+    };
+
+    let dataset_train = get_data(frames.clone(), 0, 8);
+    let dataset_test = get_data(frames, 8, 10);
 
     let dataloader_train = DataLoaderBuilder::new(batcher.clone())
         .batch_size(config.batch_size)
