@@ -23,9 +23,9 @@ pub struct TrainingConfig {
     pub optimizer: AdamConfig,
     #[config(default = 10)]
     pub num_epochs: usize,
-    #[config(default = 64)]
+    #[config(default = 32)]
     pub batch_size: usize,
-    #[config(default = 4)]
+    #[config(default = 0)]
     pub num_workers: usize,
     #[config(default = 42)]
     pub seed: u64,
@@ -43,7 +43,7 @@ pub fn train<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
     device: B::Device,
-    frames: Vec<AlignedFrame<B>>,
+    frames: Vec<AlignedFrame>,
 ) {
     create_artifact_dir(artifact_dir);
     config
@@ -60,7 +60,7 @@ pub fn train<B: AutodiffBackend>(
         dataset_info,
     };
 
-    let frames = WindowedFrame::from_aligned_frames(&frames);
+    let frames = WindowedFrame::from_aligned_frames(&frames, &device);
     let (train, test) = frames.split_at(frames.len() * 80 / 100);
 
     let dataset_train = InMemDataset::new(train.to_vec());

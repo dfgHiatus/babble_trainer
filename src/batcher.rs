@@ -32,7 +32,7 @@ pub struct DatasetInfo {
 }
 
 impl DatasetInfo {
-    pub fn from_frames<B: Backend>(frames: &[AlignedFrame<B>]) -> Self {
+    pub fn from_frames(frames: &[AlignedFrame]) -> Self {
         let mut pitch_min_l = f32::INFINITY;
         let mut pitch_max_l = f32::NEG_INFINITY;
         let mut yaw_min_l = f32::INFINITY;
@@ -109,7 +109,10 @@ pub struct WindowedFrame<B: Backend> {
 }
 
 impl<B: Backend> WindowedFrame<B> {
-    pub fn from_aligned_frames(aligned: &[AlignedFrame<B>]) -> Vec<WindowedFrame<B>> {
+    pub fn from_aligned_frames(
+        aligned: &[AlignedFrame],
+        device: &B::Device,
+    ) -> Vec<WindowedFrame<B>> {
         aligned
             .windows(4)
             .map(|w| {
@@ -117,8 +120,9 @@ impl<B: Backend> WindowedFrame<B> {
                 let left_eye = Tensor::cat(
                     w.iter()
                         .map(|f| {
-                            let [height, width] = f.left_eye.dims();
-                            f.left_eye.clone().reshape([1, height, width])
+                            let (height, width) = f.left_eye.dimensions();
+                            Tensor::<B, 1>::from_data(&f.left_eye.as_raw()[..], device)
+                                .reshape([1, height, width])
                         })
                         .collect::<Vec<_>>(),
                     0,
@@ -126,8 +130,9 @@ impl<B: Backend> WindowedFrame<B> {
                 let right_eye = Tensor::cat(
                     w.iter()
                         .map(|f| {
-                            let [height, width] = f.right_eye.dims();
-                            f.right_eye.clone().reshape([1, height, width])
+                            let (height, width) = f.right_eye.dimensions();
+                            Tensor::<B, 1>::from_data(&f.right_eye.as_raw()[..], device)
+                                .reshape([1, height, width])
                         })
                         .collect::<Vec<_>>(),
                     0,

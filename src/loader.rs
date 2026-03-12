@@ -7,15 +7,11 @@ use histogram_equalization::hist_equal_hsv_rgb;
 use image::{DynamicImage, GenericImageView, RgbImage};
 use log::{debug, info};
 
-use crate::corruption_detector::FastCorruptionDetector;
+use crate::{ImageData, corruption_detector::FastCorruptionDetector};
 
 const FLAG_GOOD_DATA: u32 = 1 << 30;
 
-fn decode_jpeg<B: Backend>(
-    device: &B::Device,
-    data: &[u8],
-    equalize_histogram: bool,
-) -> Result<Tensor<B, 2>> {
+fn decode_jpeg(data: &[u8], equalize_histogram: bool) -> Result<ImageData> {
     let img = image::load_from_memory(data)?;
     debug!(
         "Decoded JPEG image: dimensions={:?}, color_type={:?}",
@@ -23,7 +19,7 @@ fn decode_jpeg<B: Backend>(
         img.color()
     );
 
-    let data = if equalize_histogram {
+    Ok(if equalize_histogram {
         let dimensions = img.dimensions();
         let channels = 3;
         let stride = dimensions.0 as usize * channels;
@@ -38,21 +34,29 @@ fn decode_jpeg<B: Backend>(
             dimensions.1,
             128,
         );
-        
+
         DynamicImage::ImageRgb8(
-        RgbImage::from_raw(dimensions.0, dimensions.1, dst_bytes)
+            RgbImage::from_raw(dimensions.0, dimensions.1, dst_bytes)
                 .ok_or(anyhow!("histogram equalized image was invalid"))?,
         )
         .into_luma8()
-        .into_raw()
     } else {
-        img.into_luma8().into_raw()
-    };
+        img.into_luma8()
+    })
+}
 
-    debug!("Converted image to grayscale: data length={}", data.len());
-    let tensor: Tensor<B, 1> = Tensor::from_data(&data[..], device).div_scalar(255.0);
+fn iamge_to_tensor<B: Backend>(device: &B::Device, img: ImageData) -> Result<Tensor<B, 2>> {
+    let (width, height) = img.dimensions();
+    let raw_pixels = img.into_raw();
 
-    Ok(tensor.reshape([128, 128]))
+    // debug!("Converted image to grayscale: data length={}", data.len());
+    // let tensor: Tensor<B, 1> = Tensor::from_data(&data[..], device).div_scalar(255.0);
+
+    // Convert the raw pixel data into a tensor
+    let tensor = Tensor::<B, 1>::from_data(&raw_pixels[..], device)
+        .div_scalar(255.0)
+        .reshape([height as usize, width as usize]);
+    Ok(tensor)
 }
 
 #[derive(Debug, Clone)]
@@ -159,9 +163,9 @@ impl ImageLabel {
     }
 }
 
-pub struct FileReader<B: Backend> {
-    pub left_eye_frames: HashMap<u64, Tensor<B, 2>>,
-    pub right_eye_frames: HashMap<u64, Tensor<B, 2>>,
+pub struct FileReader {
+    pub left_eye_frames: HashMap<u64, ImageData>,
+    pub right_eye_frames: HashMap<u64, ImageData>,
     pub label_frames: HashMap<u64, ImageLabel>,
 
     pub raw_frames: u64,
@@ -171,7 +175,7 @@ pub struct FileReader<B: Backend> {
     detector: FastCorruptionDetector,
 }
 
-impl<B: Backend> FileReader<B> {
+impl FileReader {
     pub fn new() -> Self {
         Self {
             left_eye_frames: HashMap::new(),
@@ -186,7 +190,6 @@ impl<B: Backend> FileReader<B> {
 
     pub fn read_capture_file(
         &mut self,
-        device: &B::Device,
         filename: &str,
         do_glitch_detection: bool,
         equalize_histogram: bool,
@@ -239,8 +242,8 @@ impl<B: Backend> FileReader<B> {
 
             self.raw_frames += 1;
 
-            let left_image = decode_jpeg::<B>(device, &image_left_data, equalize_histogram)?;
-            let right_image = decode_jpeg::<B>(device, &image_right_data, equalize_histogram)?;
+            let left_image = decode_jpeg(&image_left_data, equalize_histogram)?;
+            let right_image = decode_jpeg(&image_right_data, equalize_histogram)?;
 
             let bad = if do_glitch_detection {
                 let (bad_left, _, _) = self.detector.is_corrupted(&left_image);

@@ -4,10 +4,12 @@ use burn::{
     prelude::ToElement,
     tensor::{Tensor, backend::Backend},
 };
-use log::{error, info};
+use log::error;
+
+use crate::ImageData;
 
 /// Takes in a grayscale image tensor with values 0-1 and calculates the consistency (standard deviation of row differences)
-pub fn calculate_row_pattern_consistency<B: Backend>(image: &Tensor<B, 2>) -> Tensor<B, 1> {
+pub fn calculate_row_pattern_consistency_tensor<B: Backend>(image: &Tensor<B, 2>) -> Tensor<B, 1> {
     // Calculate row means
     let row_means = image.clone().mean_dim(1);
 
@@ -16,15 +18,53 @@ pub fn calculate_row_pattern_consistency<B: Backend>(image: &Tensor<B, 2>) -> Te
         let n = row_means.dims()[0];
 
         if n < 2 {
-            error!("Not enough rows to calculate consistency, Dims: {:?}", row_means.dims());
+            error!(
+                "Not enough rows to calculate consistency, Dims: {:?}",
+                row_means.dims()
+            );
             return Tensor::from([0.0]);
         }
 
         let diffs = row_means.clone().narrow(0, 1, n - 1) - row_means.narrow(0, 0, n - 1);
 
-        diffs.var(0).flatten(0, 1   )
+        diffs.var(0).flatten(0, 1)
     } else {
         Tensor::from([0.0])
+    }
+}
+
+/// Takes in a grayscale image tensor with values 0-1 and calculates the consistency (standard deviation of row differences)
+pub fn calculate_row_pattern_consistency_image(image: &ImageData) -> f32 {
+    // Calculate row means
+    let row_means = image
+        .rows()
+        .map(|row| {
+            let len = row.len() as f32;
+            let sum: u32 = row.map(|pixel| pixel[0] as u32).sum();
+            sum as f32 / len
+        })
+        .collect::<Vec<f32>>();
+
+    // Calculate consistency (standard deviation of row differences)
+    if row_means.len() > 1 {
+        let n = row_means.len();
+
+        if n < 2 {
+            error!(
+                "Not enough rows to calculate consistency, Dims: {:?}",
+                row_means.len()
+            );
+            return 0.0;
+        }
+
+        let diffs = row_means
+            .windows(2)
+            .map(|w| w[1] - w[0])
+            .collect::<Vec<f32>>();
+
+        diffs.iter().map(|d| d * d).sum::<f32>() / (diffs.len() as f32) // Variance
+    } else {
+        0.0
     }
 }
 
@@ -127,8 +167,8 @@ impl FastCorruptionDetector {
 
     /// Determine if frame is corrupted based on row pattern consistency.
     /// Returns (is_corrupted, metric_value, threshold_used)
-    pub fn is_corrupted(&mut self, frame: &Tensor<impl Backend, 2>) -> (bool, f32, f32) {
-        let metric_value = calculate_row_pattern_consistency(&frame)
+    pub fn is_corrupted_tensor(&mut self, frame: &Tensor<impl Backend, 2>) -> (bool, f32, f32) {
+        let metric_value = calculate_row_pattern_consistency_tensor(&frame)
             .into_scalar()
             .to_f32();
 
@@ -143,10 +183,26 @@ impl FastCorruptionDetector {
         (is_corrupted, metric_value, self.current_threshold)
     }
 
+    /// Determine if frame is corrupted based on row pattern consistency.
+    /// Returns (is_corrupted, metric_value, threshold_used)
+    pub fn is_corrupted(&mut self, frame: &ImageData) -> (bool, f32, f32) {
+        let metric_value = calculate_row_pattern_consistency_image(frame);
+
+        self.total_frames += 1;
+
+        // Update adaptive threshold
+        self.update_adaptive_threshold(metric_value);
+
+        // Check if corrupted
+        let is_corrupted = metric_value > self.current_threshold;
+
+        (is_corrupted, metric_value, self.current_threshold)
+    }
+
     pub fn process_frame_pair(
         &mut self,
-        left_frame: &Tensor<impl Backend, 2>,
-        right_frame: &Tensor<impl Backend, 2>,
+        left_frame: &ImageData,
+        right_frame: &ImageData,
     ) -> CorruptionDetectionResult {
         self.total_frames += 1;
 

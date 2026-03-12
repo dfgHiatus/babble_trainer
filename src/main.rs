@@ -1,13 +1,13 @@
 #![recursion_limit = "256"]
 
 use crate::{
-    frame_correlator::{AlignedFrame, align_frames},
+    frame_correlator::align_frames,
     loader::FileReader,
-    models::{MicroChadConfig, MultiInputMergedMicroChadConfig}, trainer::{TrainingConfig, train},
+    models::MicroChadConfig,
+    trainer::{TrainingConfig, train},
 };
-use burn::{
-    backend::Autodiff, optim::AdamConfig, prelude::Backend, record::{FullPrecisionSettings, Recorder}
-};
+use burn::{backend::Autodiff, optim::AdamConfig};
+use image::{ImageBuffer, Luma};
 use log::{error, info};
 // use burn_import::pytorch::PyTorchFileRecorder;
 
@@ -18,17 +18,19 @@ mod loader;
 mod models;
 mod trainer;
 
+pub type ImageData = ImageBuffer<Luma<u8>, Vec<u8>>;
+
 fn main() {
     // env_logger::builder()
-    //     .filter_level(log::LevelFilter::Warn)
+    //     .filter_level(log::LevelFilter::Info)
     //     .init();
 
     type Backend = burn::backend::Cuda;
     type AutodiffBackend = Autodiff<Backend>;
     let device = Default::default();
-    let mut reader = FileReader::<AutodiffBackend>::new();
+    let mut reader = FileReader::new();
 
-    match reader.read_capture_file(&device, "./data/gaze.bin", false, true, 0, 0) {
+    match reader.read_capture_file("./data/user_cal.bin", false, true, 0, 0) {
         Ok(_) => {
             info!("Finished processing capture file");
         }
@@ -39,6 +41,10 @@ fn main() {
 
     let aligned_frames = align_frames(reader);
 
-    train::<AutodiffBackend>("./artifacts", 
-        TrainingConfig::new(MicroChadConfig::new(3), AdamConfig::new()), device, aligned_frames);
+    train::<AutodiffBackend>(
+        "./artifacts",
+        TrainingConfig::new(MicroChadConfig::new(3), AdamConfig::new()),
+        device,
+        aligned_frames,
+    );
 }

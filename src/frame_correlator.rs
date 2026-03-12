@@ -1,8 +1,7 @@
-use burn::{Tensor, prelude::Backend};
 use log::info;
 use pearson::correlate;
 
-use crate::loader::{FileReader, ImageLabel};
+use crate::{ImageData, loader::{FileReader, ImageLabel}};
 
 const WIN_SIZE_MUL: usize = 10;
 
@@ -82,14 +81,14 @@ fn find_best_unused_neighbor(
     (best_idx, best_dev)
 }
 
-pub struct AlignedFrame<B: Backend> {
+pub struct AlignedFrame {
     pub label: ImageLabel,
-    pub left_eye: Tensor<B, 2>,
-    pub right_eye: Tensor<B, 2>,
+    pub left_eye: ImageData,
+    pub right_eye: ImageData,
     pub timestamp: u64,
 }
 
-pub fn align_frames<B: Backend>(fr: FileReader<B>) -> Vec<AlignedFrame<B>> {
+pub fn align_frames(fr: FileReader) -> Vec<AlignedFrame> {
     let mut left_frames = fr
         .left_eye_frames
         .iter()
@@ -143,10 +142,10 @@ pub fn align_frames<B: Backend>(fr: FileReader<B>) -> Vec<AlignedFrame<B>> {
         left_offset, right_offset
     );
 
-    struct PotentialMatch<B: Backend> {
+    struct PotentialMatch {
         label_data: ImageLabel,
-        left_img: Tensor<B, 2>,
-        right_img: Tensor<B, 2>,
+        left_img: ImageData,
+        right_img: ImageData,
         label_ts: u64,
         quality: u64,
         left_idx: usize,
@@ -202,7 +201,11 @@ pub fn align_frames<B: Backend>(fr: FileReader<B>) -> Vec<AlignedFrame<B>> {
         })
         .collect::<Vec<_>>();
 
-    info!("Found {} potential matches before conflict resolution, but dropped {}", potential_matches.len(), potential_matches.len() - potential_matches.len());
+    info!(
+        "Found {} potential matches before conflict resolution, but dropped {}",
+        potential_matches.len(),
+        potential_matches.len() - potential_matches.len()
+    );
 
     potential_matches.sort_by_key(|x| x.quality); // sort by quality
 
@@ -224,7 +227,10 @@ pub fn align_frames<B: Backend>(fr: FileReader<B>) -> Vec<AlignedFrame<B>> {
         }
     }
 
-    info!("Dropped {} potential matches due to conflicts", potential_matches_len - final_matches.len());
+    info!(
+        "Dropped {} potential matches due to conflicts",
+        potential_matches_len - final_matches.len()
+    );
 
     final_matches.sort_by_key(|x| x.timestamp); // sort by label timestamp
 
