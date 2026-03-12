@@ -164,19 +164,48 @@ impl MultiInputMergedMicroChadConfig {
             .init(device),
         }
     }
+}
 
-    pub fn forward<B: Backend>(
-        &self,
-        model: &MultiInputMergedMicroChad<B>,
-        x: Tensor<B, 4>,
-    ) -> Tensor<B, 2> {
+impl<B: Backend> MultiInputMergedMicroChad<B> {
+    pub fn forward(&self, x: Tensor<B, 4>) -> Tensor<B, 2> {
         let inputs_left = x.clone().select(1, Tensor::from([0, 2, 4, 6]));
         let inputs_right = x.select(1, Tensor::from([1, 3, 5, 7]));
 
-        let preds_left = model.left.forward(inputs_left);
-        let preds_right = model.right.forward(inputs_right);
+        let preds_left = self.left.forward(inputs_left);
+        let preds_right = self.right.forward(inputs_right);
 
         let dim = preds_left.dims().len() - 1;
         Tensor::cat(vec![preds_left, preds_right], dim)
+    }
+
+    pub fn forward_classification(
+        &self,
+        images: Tensor<B, 4>,
+        targets: Tensor<B, 2>,
+    ) -> RegressionOutput<B> {
+        let output = self.forward(images);
+        let loss = MseLoss::new().forward(output.clone(), targets.clone(), Reduction::Auto);
+
+        RegressionOutput::new(loss, output, targets)
+    }
+}
+
+impl<B: AutodiffBackend> TrainStep for MultiInputMergedMicroChad<B> {
+    type Input = EyeDataBatch<B>;
+    type Output = RegressionOutput<B>;
+
+    fn step(&self, batch: EyeDataBatch<B>) -> TrainOutput<RegressionOutput<B>> {
+        let item = self.forward_classification(batch.images, batch.targets);
+
+        TrainOutput::new(self, item.loss.backward(), item)
+    }
+}
+
+impl<B: Backend> InferenceStep for MultiInputMergedMicroChad<B> {
+    type Input = EyeDataBatch<B>;
+    type Output = RegressionOutput<B>;
+
+    fn step(&self, batch: EyeDataBatch<B>) -> RegressionOutput<B> {
+        self.forward_classification(batch.images, batch.targets)
     }
 }

@@ -246,18 +246,17 @@ impl FileReader {
             let right_image = decode_jpeg(&image_right_data, equalize_histogram)?;
 
             let bad = if do_glitch_detection {
-                let (bad_left, _, _) = self.detector.is_corrupted(&left_image);
-                let (bad_right, _, _) = self.detector.is_corrupted(&right_image);
+                let detection = self.detector.process_frame_pair(&left_image, &right_image);
 
-                if bad_left || bad_right {
+                if detection.left_corrupted || detection.right_corrupted {
                     self.total_bad_frames += 1;
                     debug!(
                         "Detected bad frame at timestamp {}: bad_left={}, bad_right={}",
-                        data.timestamp, bad_left, bad_right
+                        data.timestamp, detection.left_corrupted, detection.right_corrupted
                     );
                 }
 
-                bad_left || bad_right
+                detection.left_corrupted || detection.right_corrupted
             } else {
                 false
             };

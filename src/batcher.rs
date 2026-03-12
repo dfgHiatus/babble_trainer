@@ -103,8 +103,8 @@ pub struct EyeDataBatch<B: Backend> {
 #[derive(Clone, Debug)]
 pub struct WindowedFrame<B: Backend> {
     pub label: ImageLabel,
-    pub left_eye: Tensor<B, 3>,
-    pub right_eye: Tensor<B, 3>,
+    pub left_eye: [Tensor<B, 2>; 4],
+    pub right_eye: [Tensor<B, 2>; 4],
     pub timestamp: u64,
 }
 
@@ -116,32 +116,32 @@ impl<B: Backend> WindowedFrame<B> {
         aligned
             .windows(4)
             .map(|w| {
-                // Concat the 4 frames in the window along the channel dimension
-                let left_eye = Tensor::cat(
-                    w.iter()
-                        .map(|f| {
-                            let (height, width) = f.left_eye.dimensions();
-                            Tensor::<B, 1>::from_data(&f.left_eye.as_raw()[..], device)
-                                .reshape([1, height, width])
-                        })
-                        .collect::<Vec<_>>(),
-                    0,
-                );
-                let right_eye = Tensor::cat(
-                    w.iter()
-                        .map(|f| {
-                            let (height, width) = f.right_eye.dimensions();
-                            Tensor::<B, 1>::from_data(&f.right_eye.as_raw()[..], device)
-                                .reshape([1, height, width])
-                        })
-                        .collect::<Vec<_>>(),
-                    0,
-                );
+                let process_frame_left = |f: &AlignedFrame| {
+                    let (height, width) = f.left_eye.dimensions();
+                    Tensor::<B, 1>::from_data(&f.left_eye.as_raw()[..], device)
+                        .reshape([height, width])
+                };
+
+                let process_frame_right = |f: &AlignedFrame| {
+                    let (height, width) = f.right_eye.dimensions();
+                    Tensor::<B, 1>::from_data(&f.right_eye.as_raw()[..], device)
+                        .reshape([height, width])
+                };
 
                 WindowedFrame {
                     label: w.last().unwrap().label.clone(),
-                    left_eye,
-                    right_eye,
+                    left_eye: [
+                        process_frame_left(&w[0]),
+                        process_frame_left(&w[1]),
+                        process_frame_left(&w[2]),
+                        process_frame_left(&w[3]),
+                    ],
+                    right_eye: [
+                        process_frame_right(&w[0]),
+                        process_frame_right(&w[1]),
+                        process_frame_right(&w[2]),
+                        process_frame_right(&w[3]),
+                    ],
                     timestamp: w.last().unwrap().timestamp,
                 }
             })
@@ -153,8 +153,18 @@ impl<B: Backend> WindowedFrame<B> {
     pub fn to_backend<C: Backend>(&self, device: &C::Device) -> WindowedFrame<C> {
         WindowedFrame {
             label: self.label.clone(),
-            left_eye: Tensor::from_data(self.left_eye.to_data(), device),
-            right_eye: Tensor::from_data(self.right_eye.to_data(), device),
+            left_eye: [
+                Tensor::from_data(self.left_eye[0].to_data(), device),
+                Tensor::from_data(self.left_eye[1].to_data(), device),
+                Tensor::from_data(self.left_eye[2].to_data(), device),
+                Tensor::from_data(self.left_eye[3].to_data(), device),
+            ],
+            right_eye: [
+                Tensor::from_data(self.right_eye[0].to_data(), device),
+                Tensor::from_data(self.right_eye[1].to_data(), device),
+                Tensor::from_data(self.right_eye[2].to_data(), device),
+                Tensor::from_data(self.right_eye[3].to_data(), device),
+            ],
             timestamp: self.timestamp,
         }
     }
@@ -189,22 +199,36 @@ impl<B: Backend> Batcher<B, WindowedFrame<B>, EyeDataBatch<B>> for EyeDataBatche
         let images = items
             .iter()
             .map(|item| {
-                let mut image = match self.side {
-                    EyeSide::Left => item.left_eye.clone(),
-                    EyeSide::Right => item.right_eye.clone(),
-                };
+                // let mut image = match self.side {
+                //     EyeSide::Left => item.left_eye.clone(),
+                //     EyeSide::Right => item.right_eye.clone(),
+                // };
+                // Intersperse Left and Right channels, with Left channels in even indices and Right channels in odd indices
+                let image = Tensor::cat(
+                    vec![
+                        item.left_eye[0].clone().reshape([1, 0, -1]),
+                        item.right_eye[0].clone().reshape([1, 0, -1]),
+                        item.left_eye[1].clone().reshape([1, 0, -1]),
+                        item.right_eye[1].clone().reshape([1, 0, -1]),
+                        item.left_eye[2].clone().reshape([1, 0, -1]),
+                        item.right_eye[2].clone().reshape([1, 0, -1]),
+                        item.left_eye[3].clone().reshape([1, 0, -1]),
+                        item.right_eye[3].clone().reshape([1, 0, -1]),
+                    ],
+                    0,
+                );
 
                 if self.training {
                     if rand::random::<f32>() < 0.2 {
-                        image = apply_spatial_transform(&image, 24, 10.0, 0.1);
+                        // image = apply_spatial_transform(&image, 24, 10.0, 0.1);
                     }
 
                     if rand::random::<f32>() < 0.3 {
-                        image = apply_intensity_transformation(&image, 0.1, 0.5);
+                        // image = apply_intensity_transformation(&image, 0.1, 0.5);
                     }
 
                     if rand::random::<f32>() < 0.2 {
-                        image = apply_blur(&image, 5);
+                        // image = apply_blur(&image, 5);
                     }
 
                     image.to_device(device)
@@ -225,19 +249,6 @@ impl<B: Backend> Batcher<B, WindowedFrame<B>, EyeDataBatch<B>> for EyeDataBatche
                 let left_lid_closed = item.label.routine_left_lid < 0.5;
                 let right_lid_closed = item.label.routine_right_lid < 0.5;
 
-                match self.side {
-                    EyeSide::Left => {
-                        if left_lid_closed {
-                            return Tensor::<B, 1>::from_data([0.5, 0.5, 1.0], device);
-                        }
-                    }
-                    EyeSide::Right => {
-                        if right_lid_closed {
-                            return Tensor::<B, 1>::from_data([0.5, 0.5, 1.0], device);
-                        }
-                    }
-                }
-
                 // ...Python trainer has this code but I'm prettyyyy sure it just gets overwritten 10 lines down
                 // let norm_pitch_r = (item.label.right_eye_pitch - self.dataset_info.pitch_min_r)
                 //     / (self.dataset_info.pitch_max_r - self.dataset_info.pitch_min_r);
@@ -254,16 +265,31 @@ impl<B: Backend> Batcher<B, WindowedFrame<B>, EyeDataBatch<B>> for EyeDataBatche
                 let norm_pitch_l = ((item.label.left_eye_pitch + 45.0) / 90.0).clamp(0.0, 1.0);
                 let norm_yaw_l = ((item.label.left_eye_yaw + 45.0) / 90.0).clamp(0.0, 1.0);
 
-                match self.side {
-                    EyeSide::Left => {
-                        Tensor::<B, 1>::from_data([norm_pitch_l, norm_yaw_l, 0.0], device)
-                    }
-                    EyeSide::Right => {
-                        Tensor::<B, 1>::from_data([norm_pitch_r, norm_yaw_r, 0.0], device)
-                    }
-                }
+                let left_values = if left_lid_closed {
+                    [0.5, 0.5, 1.0]
+                } else {
+                    [norm_pitch_l, norm_yaw_l, 0.0]
+                };
+
+                let right_values = if right_lid_closed {
+                    [0.5, 0.5, 1.0]
+                } else {
+                    [norm_pitch_r, norm_yaw_r, 0.0]
+                };
+
+                return Tensor::<B, 1>::from_data(
+                    [
+                        left_values[0],
+                        left_values[1],
+                        left_values[2],
+                        right_values[0],
+                        right_values[1],
+                        right_values[2],
+                    ],
+                    device,
+                );
             })
-            .map(|tensor| tensor.reshape([1, 3]))
+            .map(|tensor| tensor.reshape([1, -1]))
             .collect();
 
         let images = Tensor::cat(images, 0);

@@ -14,12 +14,12 @@ use burn::{
 use crate::{
     batcher::{DatasetInfo, EyeDataBatcher, EyeSide, WindowedFrame},
     frame_correlator::AlignedFrame,
-    models::MicroChadConfig,
+    models::{MicroChadConfig, MultiInputMergedMicroChad, MultiInputMergedMicroChadConfig},
 };
 
 #[derive(Config, Debug)]
 pub struct TrainingConfig {
-    pub model: MicroChadConfig,
+    pub model: MultiInputMergedMicroChadConfig,
     pub optimizer: AdamConfig,
     #[config(default = 10)]
     pub num_epochs: usize,

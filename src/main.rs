@@ -3,7 +3,7 @@
 use crate::{
     frame_correlator::align_frames,
     loader::FileReader,
-    models::MicroChadConfig,
+    models::{MicroChadConfig, MultiInputMergedMicroChadConfig},
     trainer::{TrainingConfig, train},
 };
 use burn::{backend::Autodiff, optim::AdamConfig};
@@ -43,7 +43,7 @@ fn main() {
 
     train::<AutodiffBackend>(
         "./artifacts",
-        TrainingConfig::new(MicroChadConfig::new(3), AdamConfig::new()),
+        TrainingConfig::new(MultiInputMergedMicroChadConfig::new(3), AdamConfig::new()),
         device,
         aligned_frames,
     );
