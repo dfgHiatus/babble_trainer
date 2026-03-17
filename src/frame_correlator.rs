@@ -1,7 +1,10 @@
+use babble_model::{
+    ImageData, ImageLabel,
+    batcher::{DatasetInfo, WindowedFrame},
+};
+use burn::data::dataset::transform::Mapper;
 use log::info;
 use pearson::correlate;
-
-use crate::{ImageData, loader::{FileReader, ImageLabel}};
 
 const WIN_SIZE_MUL: usize = 10;
 
@@ -89,27 +92,11 @@ pub struct AlignedFrame {
     pub timestamp: u64,
 }
 
-pub fn align_frames(fr: FileReader) -> Vec<AlignedFrame> {
-    let mut left_frames = fr
-        .left_eye_frames
-        .iter()
-        .map(|(ts, img)| (*ts, img.clone()))
-        .collect::<Vec<_>>();
-    let mut right_frames = fr
-        .right_eye_frames
-        .iter()
-        .map(|(ts, img)| (*ts, img.clone()))
-        .collect::<Vec<_>>();
-    let mut label_frames = fr
-        .label_frames
-        .iter()
-        .map(|(ts, img)| (*ts, img.clone()))
-        .collect::<Vec<_>>();
-
-    left_frames.sort_by_key(|(ts, _)| *ts);
-    right_frames.sort_by_key(|(ts, _)| *ts);
-    label_frames.sort_by_key(|(ts, _)| *ts);
-
+pub fn align_frames(
+    left_frames: Vec<(u64, ImageData)>,
+    right_frames: Vec<(u64, ImageData)>,
+    label_frames: Vec<(u64, ImageLabel)>,
+) -> Vec<AlignedFrame> {
     let left_timestamps: Vec<u64> = left_frames.iter().map(|(ts, _)| *ts).collect();
     let right_timestamps: Vec<u64> = right_frames.iter().map(|(ts, _)| *ts).collect();
     let label_timestamps: Vec<u64> = label_frames.iter().map(|(ts, _)| *ts).collect();
@@ -236,4 +223,82 @@ pub fn align_frames(fr: FileReader) -> Vec<AlignedFrame> {
     final_matches.sort_by_key(|x| x.timestamp); // sort by label timestamp
 
     final_matches
+}
+
+pub struct ImageToTensor;
+
+impl Mapper<Vec<AlignedFrame>, WindowedFrame> for ImageToTensor {
+    /// Converts a windowed vector of frames into a
+    fn map(&self, item: &Vec<AlignedFrame>) -> WindowedFrame {
+        WindowedFrame {
+            label: item.last().unwrap().label.clone(),
+            left_eye: [
+                item[0].left_eye.clone(),
+                item[1].left_eye.clone(),
+                item[2].left_eye.clone(),
+                item[3].left_eye.clone(),
+            ],
+            right_eye: [
+                item[0].right_eye.clone(),
+                item[1].right_eye.clone(),
+                item[2].right_eye.clone(),
+                item[3].right_eye.clone(),
+            ],
+            timestamp: item.last().unwrap().timestamp,
+        }
+    }
+}
+
+pub fn create_dataset(frames: &[AlignedFrame]) -> DatasetInfo {
+    let mut pitch_min_l = f32::INFINITY;
+    let mut pitch_max_l = f32::NEG_INFINITY;
+    let mut yaw_min_l = f32::INFINITY;
+    let mut yaw_max_l = f32::NEG_INFINITY;
+
+    let mut pitch_min_r = f32::INFINITY;
+    let mut pitch_max_r = f32::NEG_INFINITY;
+    let mut yaw_min_r = f32::INFINITY;
+    let mut yaw_max_r = f32::NEG_INFINITY;
+
+    for frame in frames {
+        let label = &frame.label;
+
+        if label.left_eye_pitch < pitch_min_l {
+            pitch_min_l = label.left_eye_pitch;
+        }
+        if label.left_eye_pitch > pitch_max_l {
+            pitch_max_l = label.left_eye_pitch;
+        }
+        if label.left_eye_yaw < yaw_min_l {
+            yaw_min_l = label.left_eye_yaw;
+        }
+        if label.left_eye_yaw > yaw_max_l {
+            yaw_max_l = label.left_eye_yaw;
+        }
+
+        if label.right_eye_pitch < pitch_min_r {
+            pitch_min_r = label.right_eye_pitch;
+        }
+        if label.right_eye_pitch > pitch_max_r {
+            pitch_max_r = label.right_eye_pitch;
+        }
+        if label.right_eye_yaw < yaw_min_r {
+            yaw_min_r = label.right_eye_yaw;
+        }
+        if label.right_eye_yaw > yaw_max_r {
+            yaw_max_r = label.right_eye_yaw;
+        }
+    }
+
+    DatasetInfo {
+        pitch_min_l,
+        pitch_max_l,
+        yaw_min_l,
+        yaw_max_l,
+        pitch_min_r,
+        pitch_max_r,
+        yaw_min_r,
+        yaw_max_r,
+        label_count: frames.len(),
+    }
 }

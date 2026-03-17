@@ -1,63 +1,13 @@
 use std::{collections::HashMap, fs::File, io::Read};
 
-use anyhow::{Result, anyhow};
-use burn::{Tensor, prelude::Backend};
+use crate::{
+    ImageData, ImageLabel, corruption_detector::FastCorruptionDetector, utils::decode_jpeg,
+};
+use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
-use histogram_equalization::hist_equal_hsv_rgb;
-use image::{DynamicImage, GenericImageView, RgbImage};
 use log::{debug, info};
 
-use crate::{ImageData, corruption_detector::FastCorruptionDetector};
-
 const FLAG_GOOD_DATA: u32 = 1 << 30;
-
-fn decode_jpeg(data: &[u8], equalize_histogram: bool) -> Result<ImageData> {
-    let img = image::load_from_memory(data)?;
-    debug!(
-        "Decoded JPEG image: dimensions={:?}, color_type={:?}",
-        img.dimensions(),
-        img.color()
-    );
-
-    Ok(if equalize_histogram {
-        let dimensions = img.dimensions();
-        let channels = 3;
-        let stride = dimensions.0 as usize * channels;
-        let mut dst_bytes: Vec<u8> = vec![0; stride * dimensions.1 as usize];
-        let src_bytes = img.into_rgb8().into_raw();
-        hist_equal_hsv_rgb(
-            &src_bytes,
-            stride as u32,
-            &mut dst_bytes,
-            stride as u32,
-            dimensions.0,
-            dimensions.1,
-            128,
-        );
-
-        DynamicImage::ImageRgb8(
-            RgbImage::from_raw(dimensions.0, dimensions.1, dst_bytes)
-                .ok_or(anyhow!("histogram equalized image was invalid"))?,
-        )
-        .into_luma8()
-    } else {
-        img.into_luma8()
-    })
-}
-
-fn iamge_to_tensor<B: Backend>(device: &B::Device, img: ImageData) -> Result<Tensor<B, 2>> {
-    let (width, height) = img.dimensions();
-    let raw_pixels = img.into_raw();
-
-    // debug!("Converted image to grayscale: data length={}", data.len());
-    // let tensor: Tensor<B, 1> = Tensor::from_data(&data[..], device).div_scalar(255.0);
-
-    // Convert the raw pixel data into a tensor
-    let tensor = Tensor::<B, 1>::from_data(&raw_pixels[..], device)
-        .div_scalar(255.0)
-        .reshape([height as usize, width as usize]);
-    Ok(tensor)
-}
 
 #[derive(Debug, Clone)]
 struct FileData {
@@ -116,49 +66,26 @@ impl FileData {
             jpeg_data_right_length: rdr.read_i32::<LittleEndian>()?,
         })
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct ImageLabel {
-    pub routine_pitch: f32,
-    pub routine_yaw: f32,
-    pub routine_distance: f32,
-    pub routine_convergence: f32,
-    pub fov_adjust_distance: f32,
-    pub left_eye_pitch: f32,
-    pub left_eye_yaw: f32,
-    pub right_eye_pitch: f32,
-    pub right_eye_yaw: f32,
-    pub routine_left_lid: f32,
-    pub routine_right_lid: f32,
-    pub routine_brow_raise: f32,
-    pub routine_brow_angry: f32,
-    pub routine_widen: f32,
-    pub routine_squint: f32,
-    pub routine_dilate: f32,
-    pub routine_state: i32,
-}
-
-impl ImageLabel {
-    fn from_file_data(data: &FileData) -> Self {
+    fn to_image_label(&self) -> ImageLabel {
         ImageLabel {
-            routine_pitch: data.routine_pitch,
-            routine_yaw: data.routine_yaw,
-            routine_distance: data.routine_distance,
-            routine_convergence: data.routine_convergence,
-            fov_adjust_distance: data.fov_adjust_distance,
-            left_eye_pitch: data.left_eye_pitch,
-            left_eye_yaw: data.left_eye_yaw,
-            right_eye_pitch: data.right_eye_pitch,
-            right_eye_yaw: data.right_eye_yaw,
-            routine_left_lid: data.routine_left_lid,
-            routine_right_lid: data.routine_right_lid,
-            routine_brow_raise: data.routine_brow_raise,
-            routine_brow_angry: data.routine_brow_angry,
-            routine_widen: data.routine_widen,
-            routine_squint: data.routine_squint,
-            routine_dilate: data.routine_dilate,
-            routine_state: data.routine_state,
+            routine_pitch: self.routine_pitch,
+            routine_yaw: self.routine_yaw,
+            routine_distance: self.routine_distance,
+            routine_convergence: self.routine_convergence,
+            fov_adjust_distance: self.fov_adjust_distance,
+            left_eye_pitch: self.left_eye_pitch,
+            left_eye_yaw: self.left_eye_yaw,
+            right_eye_pitch: self.right_eye_pitch,
+            right_eye_yaw: self.right_eye_yaw,
+            routine_left_lid: self.routine_left_lid,
+            routine_right_lid: self.routine_right_lid,
+            routine_brow_raise: self.routine_brow_raise,
+            routine_brow_angry: self.routine_brow_angry,
+            routine_widen: self.routine_widen,
+            routine_squint: self.routine_squint,
+            routine_dilate: self.routine_dilate,
+            routine_state: self.routine_state,
         }
     }
 }
@@ -275,7 +202,7 @@ impl FileReader {
                 self.right_eye_frames
                     .insert(data.video_timestamp_right, right_image);
                 self.label_frames
-                    .insert(data.timestamp, ImageLabel::from_file_data(&data));
+                    .insert(data.timestamp, data.to_image_label());
             }
         }
 

@@ -2,12 +2,12 @@ use burn::{
     nn::{
         Linear, LinearConfig, PaddingConfig2d, Relu, Sigmoid,
         conv::{Conv2d, Conv2dConfig},
-        loss::{CrossEntropyLossConfig, MseLoss, Reduction},
+        loss::{MseLoss, Reduction},
         pool::{MaxPool2d, MaxPool2dConfig},
     },
     prelude::*,
     tensor::backend::AutodiffBackend,
-    train::{ClassificationOutput, InferenceStep, RegressionOutput, TrainOutput, TrainStep},
+    train::{InferenceStep, RegressionOutput, TrainOutput, TrainStep},
 };
 
 use crate::batcher::EyeDataBatch;

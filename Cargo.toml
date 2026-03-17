@@ -5,15 +5,36 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-burn = { version = "=0.21.0-pre.1", features = ["tui", "train", "cuda", "fusion"] }
+burn = { version = "=0.21.0-pre.1", features = [
+    "tui",
+    "train",
+    "cuda",
+    "fusion",
+] }
 burn-import = "=0.21.0-pre.1"
 byteorder = "1.5.0"
+circular-buffer = "1.2.0"
+eframe = "0.33.3"
+egui_extras = { version = "0.33.3", features = ["all_loaders"] }
 env_logger = "0.11.9"
+futures = "0.3.32"
 histogram_equalization = "0.2.4"
 image = { version = "0.25.9", features = ["jpeg"], default-features = false }
 log = "0.4.29"
 pearson = "1.0.0"
 rand = { version = "0.10.0", features = [] }
+rfd = "0.17.2"
+
+[[bin]]
+name = "data_viewer"
+path = "src/bin/data_viewer.rs"
+
+[build-dependencies]
+csbindgen = "1.9.6"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "babble_model"
 
 [profile.dev.package."*"]
 opt-level = 3

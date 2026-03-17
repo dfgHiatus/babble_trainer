@@ -1,12 +1,8 @@
-use burn::{
-    Tensor,
-    data::{dataloader::batcher::Batcher, dataset::transform::Mapper},
-    prelude::Backend,
-};
+use burn::{Tensor, data::dataloader::batcher::Batcher, prelude::Backend};
 
-use crate::{ImageData, frame_correlator::AlignedFrame, loader::ImageLabel};
+use crate::{ImageData, ImageLabel};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct DatasetInfo {
     pub pitch_min_l: f32,
     pub pitch_max_l: f32,
@@ -21,63 +17,7 @@ pub struct DatasetInfo {
     pub label_count: usize,
 }
 
-impl DatasetInfo {
-    pub fn from_frames(frames: &[AlignedFrame]) -> Self {
-        let mut pitch_min_l = f32::INFINITY;
-        let mut pitch_max_l = f32::NEG_INFINITY;
-        let mut yaw_min_l = f32::INFINITY;
-        let mut yaw_max_l = f32::NEG_INFINITY;
-
-        let mut pitch_min_r = f32::INFINITY;
-        let mut pitch_max_r = f32::NEG_INFINITY;
-        let mut yaw_min_r = f32::INFINITY;
-        let mut yaw_max_r = f32::NEG_INFINITY;
-
-        for frame in frames {
-            let label = &frame.label;
-
-            if label.left_eye_pitch < pitch_min_l {
-                pitch_min_l = label.left_eye_pitch;
-            }
-            if label.left_eye_pitch > pitch_max_l {
-                pitch_max_l = label.left_eye_pitch;
-            }
-            if label.left_eye_yaw < yaw_min_l {
-                yaw_min_l = label.left_eye_yaw;
-            }
-            if label.left_eye_yaw > yaw_max_l {
-                yaw_max_l = label.left_eye_yaw;
-            }
-
-            if label.right_eye_pitch < pitch_min_r {
-                pitch_min_r = label.right_eye_pitch;
-            }
-            if label.right_eye_pitch > pitch_max_r {
-                pitch_max_r = label.right_eye_pitch;
-            }
-            if label.right_eye_yaw < yaw_min_r {
-                yaw_min_r = label.right_eye_yaw;
-            }
-            if label.right_eye_yaw > yaw_max_r {
-                yaw_max_r = label.right_eye_yaw;
-            }
-        }
-
-        DatasetInfo {
-            pitch_min_l,
-            pitch_max_l,
-            yaw_min_l,
-            yaw_max_l,
-            pitch_min_r,
-            pitch_max_r,
-            yaw_min_r,
-            yaw_max_r,
-            label_count: frames.len(),
-        }
-    }
-}
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EyeDataBatcher {
     pub training: bool,
     pub dataset_info: DatasetInfo,
@@ -97,35 +37,11 @@ pub struct WindowedFrame {
     pub timestamp: u64,
 }
 
-pub struct ImageToTensor;
-
-impl Mapper<Vec<AlignedFrame>, WindowedFrame> for ImageToTensor {
-    /// Converts a windowed vector of frames into a
-    fn map(&self, item: &Vec<AlignedFrame>) -> WindowedFrame {
-        WindowedFrame {
-            label: item.last().unwrap().label.clone(),
-            left_eye: [
-                item[0].left_eye.clone(),
-                item[1].left_eye.clone(),
-                item[2].left_eye.clone(),
-                item[3].left_eye.clone(),
-            ],
-            right_eye: [
-                item[0].right_eye.clone(),
-                item[1].right_eye.clone(),
-                item[2].right_eye.clone(),
-                item[3].right_eye.clone(),
-            ],
-            timestamp: item.last().unwrap().timestamp,
-        }
-    }
-}
-
 fn apply_spatial_transform(
     image: [ImageData; 8],
-    max_shift: i32,
-    max_rotation: f32,
-    max_scale: f32,
+    _max_shift: i32,
+    _max_rotation: f32,
+    _max_scale: f32,
 ) -> [ImageData; 8] {
     // Placeholder for actual spatial transformation logic
     image.clone()
@@ -133,14 +49,14 @@ fn apply_spatial_transform(
 
 fn apply_intensity_transformation(
     image: [ImageData; 8],
-    brightness_range: f32,
-    contrast_range: f32,
+    _brightness_range: f32,
+    _contrast_range: f32,
 ) -> [ImageData; 8] {
     // Placeholder for actual intensity transformation logic
     image.clone()
 }
 
-fn apply_blur(image: [ImageData; 8], max_kernel_size: i32) -> [ImageData; 8] {
+fn apply_blur(image: [ImageData; 8], _max_kernel_size: i32) -> [ImageData; 8] {
     // Placeholder for actual blur transformation logic
     image.clone()
 }
