@@ -3,6 +3,7 @@ use image::{ImageBuffer, Luma};
 pub mod batcher;
 pub mod corruption_detector;
 pub mod ffi;
+pub mod frame_correlator;
 pub mod loader;
 pub mod models;
 pub mod trainer;

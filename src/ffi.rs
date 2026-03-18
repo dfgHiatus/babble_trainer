@@ -5,19 +5,33 @@ use std::{
 };
 
 use burn::{
+    backend::Autodiff,
     config::Config,
-    data::dataloader::batcher::Batcher,
-    module::Module,
+    data::{
+        dataloader::{DataLoaderBuilder, batcher::Batcher},
+        dataset::{
+            Dataset, InMemDataset,
+            transform::{MapperDataset, PartialDataset, ShuffledDataset, WindowsDataset},
+        },
+    },
+    module::{AutodiffModule, Module},
+    nn::loss::MseLoss,
+    optim::{AdamConfig, GradientsParams, Optimizer},
+    prelude::ToElement,
     record::{Recorder, SensitiveCompactRecorder},
+    tensor::backend::AutodiffBackend,
 };
 use circular_buffer::CircularBuffer;
 use histogram_equalization::hist_equal_hsv_rgb;
 use image::{DynamicImage, GenericImageView, RgbImage};
+use log::{error, info};
 
 use crate::{
     ImageData, ImageLabel,
     batcher::{DatasetInfo, EyeDataBatcher, WindowedFrame},
-    models::MultiInputMergedMicroChad,
+    frame_correlator::{AlignedFrame, ImageToTensor, align_frames, create_dataset},
+    loader::FileReader,
+    models::{MultiInputMergedMicroChad, MultiInputMergedMicroChadConfig},
     trainer::TrainingConfig,
 };
 
@@ -103,7 +117,6 @@ fn equalize_histogram(data: &[u8; 128 * 128]) -> ImageData {
     )
     .into_luma8()
 }
-
 
 #[repr(C)]
 pub struct ModelOutputResult {
@@ -315,4 +328,225 @@ pub extern "C" fn freeModelOutputResult(result: ModelOutputResult) {
             let _ = CString::from_raw(result.value.error_message);
         }
     }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum CallbackType {
+    Batch = 0,
+    Epoch = 1,
+    Finished = 2,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TrainingDataCallback {
+    callback_type: CallbackType,
+    low: i32,
+    high: i32,
+    loss: f32,
+}
+
+pub fn train<B: AutodiffBackend>(
+    model_name: &str,
+    config: TrainingConfig,
+    device: B::Device,
+    frames: Vec<AlignedFrame>,
+    cb: extern "C" fn(epoch: TrainingDataCallback) -> (),
+) {
+    config
+        .save(format!("{model_name}_config.json"))
+        .expect("Config should be saved successfully");
+
+    B::seed(&device, config.seed);
+
+    let dataset_info = create_dataset(&frames);
+
+    let batcher = EyeDataBatcher {
+        training: true,
+        dataset_info,
+    };
+    let test_batcher = EyeDataBatcher {
+        training: false,
+        dataset_info,
+    };
+
+    let get_data = |frames, start, end| {
+        let frames = ShuffledDataset::new(
+            WindowsDataset::new(InMemDataset::new(frames), 4),
+            config.seed,
+        );
+        let len = frames.len();
+
+        MapperDataset::new(
+            PartialDataset::new(frames, len * start / 10, len * end / 10),
+            ImageToTensor,
+        )
+    };
+
+    let dataset_train = get_data(frames.clone(), 0, 8);
+    let train_size = dataset_train.len();
+    let dataset_test = get_data(frames, 8, 10);
+    let test_size = dataset_test.len();
+
+    let dataloader_train = DataLoaderBuilder::new(batcher)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(dataset_train);
+
+    let dataloader_test = DataLoaderBuilder::new(test_batcher)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(dataset_test);
+
+    let mut model = config.model.init::<B>(&device);
+    let mut optim = config.optimizer.init();
+
+    for epoch in 1..config.num_epochs + 1 {
+        cb(TrainingDataCallback {
+            callback_type: CallbackType::Epoch,
+            low: epoch as i32,
+            high: config.num_epochs as i32,
+            loss: 0.0,
+        });
+
+        // Implement our training loop.
+        for (iteration, batch) in dataloader_train.iter().enumerate() {
+            let output = model.forward(batch.images);
+            let loss = MseLoss::new().forward(
+                output.clone(),
+                batch.targets.clone(),
+                burn::nn::loss::Reduction::Auto,
+            );
+
+            info!(
+                "[Train - Epoch {} - Iteration {}] Loss {:.3}",
+                epoch,
+                iteration,
+                loss.clone().into_scalar(),
+            );
+            cb(TrainingDataCallback {
+                callback_type: CallbackType::Batch,
+                low: (iteration * config.batch_size) as i32,
+                high: (train_size + test_size) as i32,
+                loss: loss.clone().into_scalar().to_f32(),
+            });
+
+            // Gradients for the current backward pass
+            let grads = loss.backward();
+            // Gradients linked to each parameter of the model.
+            let grads = GradientsParams::from_grads(grads, &model);
+            // Update the model using the optimizer.
+            model = optim.step(config.learning_rate, model, grads);
+        }
+
+        // Get the model without autodiff.
+        let model_valid = model.valid();
+
+        // Implement our validation loop.
+        for (iteration, batch) in dataloader_test.iter().enumerate() {
+            let output = model_valid.forward(batch.images);
+            let loss = MseLoss::new().forward(
+                output.clone(),
+                batch.targets.clone(),
+                burn::nn::loss::Reduction::Auto,
+            );
+
+            info!(
+                "[Valid - Epoch {} - Iteration {}] Loss {}",
+                epoch,
+                iteration,
+                loss.clone().into_scalar()
+            );
+            cb(TrainingDataCallback {
+                callback_type: CallbackType::Batch,
+                low: (train_size + (iteration * config.batch_size)) as i32,
+                high: (train_size + test_size) as i32,
+                loss: loss.clone().into_scalar().to_f32(),
+            });
+        }
+    }
+
+    model
+        .save_file(model_name, &SensitiveCompactRecorder::new())
+        .expect("Trained model should be saved successfully");
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trainModel(
+    usercal_path: *const c_char,
+    output_path: *const c_char,
+    cb: extern "C" fn(epoch: TrainingDataCallback) -> (),
+) {
+    env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .init();
+
+    let usercal_path_cstr = unsafe { CStr::from_ptr(usercal_path) };
+    let output_path_cstr = unsafe { CStr::from_ptr(output_path) };
+
+    type Backend = burn::backend::Cuda;
+    type AutodiffBackend = Autodiff<Backend>;
+    let device = Default::default();
+    let mut reader = FileReader::new();
+
+    info!(
+        "Starting training with usercal path: {:?} and output path: {:?}",
+        usercal_path_cstr, output_path_cstr
+    );
+
+    let aligned_frames =
+        match reader.read_capture_file(usercal_path_cstr.to_str().unwrap(), true, true, 0, 0) {
+            Ok(_) => {
+                info!("Finished processing capture file");
+                info!(
+                    "Read {} left eye frames, {} right eye frames, and {} label frames",
+                    reader.left_eye_frames.len(),
+                    reader.right_eye_frames.len(),
+                    reader.label_frames.len()
+                );
+
+                let mut left_frames: Vec<(u64, ImageData)> = reader
+                    .left_eye_frames
+                    .iter()
+                    .map(|(ts, img)| (*ts, img.clone()))
+                    .collect();
+                let mut right_frames: Vec<(u64, ImageData)> = reader
+                    .right_eye_frames
+                    .iter()
+                    .map(|(ts, img)| (*ts, img.clone()))
+                    .collect();
+                let mut label_frames: Vec<(u64, ImageLabel)> = reader
+                    .label_frames
+                    .iter()
+                    .map(|(ts, label)| (*ts, label.clone()))
+                    .collect();
+
+                left_frames.sort_by_key(|(ts, _)| *ts);
+                right_frames.sort_by_key(|(ts, _)| *ts);
+                label_frames.sort_by_key(|(ts, _)| *ts);
+
+                align_frames(left_frames, right_frames, label_frames)
+            }
+            Err(e) => {
+                error!("Failed to read capture file: {e}");
+                return;
+            }
+        };
+
+    train::<AutodiffBackend>(
+        output_path_cstr.to_str().unwrap(),
+        TrainingConfig::new(MultiInputMergedMicroChadConfig::new(5), AdamConfig::new()),
+        device,
+        aligned_frames,
+        cb,
+    );
+    cb(TrainingDataCallback {
+        callback_type: CallbackType::Finished,
+        low: 0,
+        high: 0,
+        loss: 0.0,
+    });
 }

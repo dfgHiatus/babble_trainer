@@ -27,6 +27,9 @@ namespace babble_model.Net.Sys
         [DllImport(__DllName, EntryPoint = "freeModelOutputResult", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void freeModelOutputResult(ModelOutputResult result);
 
+        [DllImport(__DllName, EntryPoint = "trainModel", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void trainModel(byte* usercal_path, byte* output_path, delegate* unmanaged[Cdecl]<TrainingDataCallback, void> cb);
+
 
     }
 
@@ -61,6 +64,22 @@ namespace babble_model.Net.Sys
         public byte* error_message;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe partial struct TrainingDataCallback
+    {
+        public CallbackType callback_type;
+        public int low;
+        public int high;
+        public float loss;
+    }
+
+
+    public enum CallbackType : byte
+    {
+        Batch = 0,
+        Epoch = 1,
+        Finished = 2,
+    }
 
 
 }

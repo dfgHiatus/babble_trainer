@@ -41,7 +41,7 @@ pub fn calculate_row_pattern_consistency_image(image: &ImageData) -> f32 {
         .map(|row| {
             let len = row.len() as f32;
             let sum: u32 = row.map(|pixel| pixel[0] as u32).sum();
-            sum as f32 / len
+            sum as f32 / len / 255.0 // Normalize to 0-1
         })
         .collect::<Vec<f32>>();
 
@@ -62,7 +62,9 @@ pub fn calculate_row_pattern_consistency_image(image: &ImageData) -> f32 {
             .map(|w| w[1] - w[0])
             .collect::<Vec<f32>>();
 
-        diffs.iter().map(|d| d * d).sum::<f32>() / (diffs.len() as f32) // Variance
+        let diff_mean = diffs.iter().sum::<f32>() / (diffs.len() as f32);
+
+        diffs.iter().map(|d| (d - diff_mean).powi(2)).sum::<f32>() / (diffs.len() as f32)
     } else {
         0.0
     }

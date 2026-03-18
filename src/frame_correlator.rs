@@ -1,4 +1,4 @@
-use babble_model::{
+use crate::{
     ImageData, ImageLabel,
     batcher::{DatasetInfo, WindowedFrame},
 };
@@ -107,9 +107,9 @@ pub fn align_frames(
         timestamps.windows(2).map(|w| w[1] - w[0]).collect()
     }
 
-    let label_intervals = estimate_frame_intervals(&label_timestamps[..3000]);
-    let left_intervals = estimate_frame_intervals(&left_timestamps[..3000]);
-    // let right_intervals = estimate_frame_intervals(&right_timestamps[..3000]);
+    let label_intervals = estimate_frame_intervals(&label_timestamps[..(3000.min(label_timestamps.len()))]);
+    let left_intervals = estimate_frame_intervals(&left_timestamps[..(3000.min(left_timestamps.len()))]);
+    // let right_intervals = estimate_frame_intervals(&right_timestamps[..(3000.min(right_timestamps.len()))]);
 
     if !label_intervals.is_empty() && !left_intervals.is_empty() {
         let avg_label_fps =

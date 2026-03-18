@@ -1,8 +1,12 @@
 #![recursion_limit = "256"]
 
 use babble_model::{
-    ImageData, ImageLabel, batcher::EyeDataBatcher, loader::FileReader,
-    models::MultiInputMergedMicroChadConfig, trainer::TrainingConfig,
+    ImageData, ImageLabel,
+    batcher::EyeDataBatcher,
+    frame_correlator::{AlignedFrame, ImageToTensor, align_frames, create_dataset},
+    loader::FileReader,
+    models::MultiInputMergedMicroChadConfig,
+    trainer::TrainingConfig,
 };
 use burn::{
     backend::Autodiff,
@@ -23,10 +27,6 @@ use burn::{
 use log::{error, info};
 use time::{UtcDateTime, macros::format_description};
 
-use crate::frame_correlator::{AlignedFrame, ImageToTensor, align_frames, create_dataset};
-
-mod frame_correlator;
-
 fn create_artifact_dir(model_name: &str) {
     let path = std::path::Path::new(model_name).parent();
 
@@ -42,7 +42,7 @@ pub fn train<B: AutodiffBackend>(
     device: B::Device,
     frames: Vec<AlignedFrame>,
 ) {
-    create_artifact_dir(format!("{model_name}/training").as_str());
+    create_artifact_dir(format!("{model_name}_training").as_str());
     config
         .save(format!("{model_name}_config.json"))
         .expect("Config should be saved successfully");
@@ -120,38 +120,37 @@ fn main() {
     let device = Default::default();
     let mut reader = FileReader::new();
 
-    let aligned_frames =
-        match reader.read_capture_file("./data/ModelData/user_cal.bin", false, true, 0, 0) {
-            Ok(_) => {
-                info!("Finished processing capture file");
+    let aligned_frames = match reader.read_capture_file("./data/user_cal.bin", false, true, 0, 0) {
+        Ok(_) => {
+            info!("Finished processing capture file");
 
-                let mut left_frames: Vec<(u64, ImageData)> = reader
-                    .left_eye_frames
-                    .iter()
-                    .map(|(ts, img)| (*ts, img.clone()))
-                    .collect();
-                let mut right_frames: Vec<(u64, ImageData)> = reader
-                    .right_eye_frames
-                    .iter()
-                    .map(|(ts, img)| (*ts, img.clone()))
-                    .collect();
-                let mut label_frames: Vec<(u64, ImageLabel)> = reader
-                    .label_frames
-                    .iter()
-                    .map(|(ts, label)| (*ts, label.clone()))
-                    .collect();
+            let mut left_frames: Vec<(u64, ImageData)> = reader
+                .left_eye_frames
+                .iter()
+                .map(|(ts, img)| (*ts, img.clone()))
+                .collect();
+            let mut right_frames: Vec<(u64, ImageData)> = reader
+                .right_eye_frames
+                .iter()
+                .map(|(ts, img)| (*ts, img.clone()))
+                .collect();
+            let mut label_frames: Vec<(u64, ImageLabel)> = reader
+                .label_frames
+                .iter()
+                .map(|(ts, label)| (*ts, label.clone()))
+                .collect();
 
-                left_frames.sort_by_key(|(ts, _)| *ts);
-                right_frames.sort_by_key(|(ts, _)| *ts);
-                label_frames.sort_by_key(|(ts, _)| *ts);
+            left_frames.sort_by_key(|(ts, _)| *ts);
+            right_frames.sort_by_key(|(ts, _)| *ts);
+            label_frames.sort_by_key(|(ts, _)| *ts);
 
-                align_frames(left_frames, right_frames, label_frames)
-            }
-            Err(e) => {
-                error!("Failed to read capture file: {e}");
-                return;
-            }
-        };
+            align_frames(left_frames, right_frames, label_frames)
+        }
+        Err(e) => {
+            error!("Failed to read capture file: {e}");
+            return;
+        }
+    };
 
     // Name by timestamp
     let timestamp = UtcDateTime::now();

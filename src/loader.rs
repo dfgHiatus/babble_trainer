@@ -172,8 +172,8 @@ impl FileReader {
                 if detection.left_corrupted || detection.right_corrupted {
                     self.total_bad_frames += 1;
                     debug!(
-                        "Detected bad frame at timestamp {}: bad_left={}, bad_right={}",
-                        data.timestamp, detection.left_corrupted, detection.right_corrupted
+                        "Detected bad frame at timestamp {}: {:?}",
+                        data.timestamp, detection
                     );
                 }
 
