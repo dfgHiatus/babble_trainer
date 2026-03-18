@@ -1,10 +1,14 @@
-use std::sync::{Mutex, OnceLock};
+use std::{
+    ffi::{CStr, CString, c_char},
+    path::Path,
+    sync::{LazyLock, Mutex},
+};
 
 use burn::{
     config::Config,
     data::dataloader::batcher::Batcher,
     module::Module,
-    record::{CompactRecorder, Recorder},
+    record::{Recorder, SensitiveCompactRecorder},
 };
 use circular_buffer::CircularBuffer;
 use histogram_equalization::hist_equal_hsv_rgb;
@@ -17,15 +21,19 @@ use crate::{
     trainer::TrainingConfig,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct ModelOutput {
     pub pitch_l: f32,
     pub yaw_l: f32,
     pub blink_l: f32,
+    pub eyebrow_l: f32,
+    pub eyewide_l: f32,
     pub pitch_r: f32,
     pub yaw_r: f32,
     pub blink_r: f32,
+    pub eyebrow_r: f32,
+    pub eyewide_r: f32,
 }
 
 type B = burn::backend::Cuda;
@@ -36,21 +44,29 @@ struct InferenceState {
     batcher: EyeDataBatcher,
 }
 
-static STATE: OnceLock<Mutex<InferenceState>> = OnceLock::new();
+static STATE: LazyLock<Mutex<Result<InferenceState, String>>> =
+    LazyLock::new(|| Mutex::new(Err("Model is not yet initialised".into())));
 
-static LEFT_EYE_FRAMES: OnceLock<Mutex<CircularBuffer<4, ImageData>>> = OnceLock::new();
-static RIGHT_EYE_FRAMES: OnceLock<Mutex<CircularBuffer<4, ImageData>>> = OnceLock::new();
+static LEFT_EYE_FRAMES: LazyLock<Mutex<CircularBuffer<4, ImageData>>> =
+    LazyLock::new(|| Mutex::new(CircularBuffer::new()));
+static RIGHT_EYE_FRAMES: LazyLock<Mutex<CircularBuffer<4, ImageData>>> =
+    LazyLock::new(|| Mutex::new(CircularBuffer::new()));
 
-fn setup_inference() -> Mutex<InferenceState> {
-    let artifact_dir = "E:\\github\\VRC Area\\babble_trainer\\artifacts";
-
+fn setup_inference(model_path: &str) -> Result<InferenceState, String> {
     let device = Default::default();
 
-    let config = TrainingConfig::load(format!("{artifact_dir}/config.json"))
-        .expect("Config should exist for the model; run train first");
-    let record = CompactRecorder::new()
-        .load(format!("{artifact_dir}/model").into(), &device)
-        .expect("Trained model should exist; run train first");
+    let config = match TrainingConfig::load(format!("{model_path}_config.json")) {
+        Ok(config) => config,
+        Err(err) => {
+            return Err(format!("Failed to load training config for model: {err}"));
+        }
+    };
+    let record = match SensitiveCompactRecorder::new().load(model_path.into(), &device) {
+        Ok(record) => record,
+        Err(err) => {
+            return Err(format!("Failed to load trained model: {err}"));
+        }
+    };
 
     let model = config.model.init::<B>(&device).load_record(record);
 
@@ -59,25 +75,7 @@ fn setup_inference() -> Mutex<InferenceState> {
         dataset_info: DatasetInfo::default(),
     };
 
-    Mutex::new(InferenceState { model, batcher })
-}
-
-fn get_inference_state() -> std::sync::MutexGuard<'static, InferenceState> {
-    STATE.get_or_init(|| setup_inference()).lock().unwrap()
-}
-
-fn get_left_eye_frames() -> std::sync::MutexGuard<'static, CircularBuffer<4, ImageData>> {
-    LEFT_EYE_FRAMES
-        .get_or_init(|| Mutex::new(CircularBuffer::new()))
-        .lock()
-        .unwrap()
-}
-
-fn get_right_eye_frames() -> std::sync::MutexGuard<'static, CircularBuffer<4, ImageData>> {
-    RIGHT_EYE_FRAMES
-        .get_or_init(|| Mutex::new(CircularBuffer::new()))
-        .lock()
-        .unwrap()
+    Ok(InferenceState { model, batcher })
 }
 
 fn equalize_histogram(data: &[u8; 128 * 128]) -> ImageData {
@@ -106,14 +104,118 @@ fn equalize_histogram(data: &[u8; 128 * 128]) -> ImageData {
     .into_luma8()
 }
 
+
+#[repr(C)]
+pub struct ModelOutputResult {
+    is_error: bool,
+    value: ModelOutputValue,
+}
+
+#[repr(C)]
+pub union ModelOutputValue {
+    model_output: ModelOutput,
+    error_message: *mut c_char,
+}
+
+impl ModelOutputResult {
+    pub fn from_error(message: String) -> Self {
+        Self {
+            is_error: true,
+            value: ModelOutputValue {
+                error_message: CString::new(message).unwrap().into_raw(),
+            },
+        }
+    }
+
+    pub fn from_output(output: ModelOutput) -> Self {
+        Self {
+            is_error: false,
+            value: ModelOutputValue {
+                model_output: output,
+            },
+        }
+    }
+
+    pub fn is_error(&self) -> bool {
+        self.is_error
+    }
+
+    pub fn get_error_message(&self) -> Option<String> {
+        if self.is_error() {
+            unsafe {
+                let c_str = CStr::from_ptr(self.value.error_message);
+                Some(c_str.to_string_lossy().into_owned())
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn get_model_output(&self) -> Option<ModelOutput> {
+        if !self.is_error() {
+            unsafe { Some(self.value.model_output) }
+        } else {
+            None
+        }
+    }
+}
+
+pub fn load_model(model_path: &str) -> Result<(), String> {
+    match setup_inference(model_path) {
+        Ok(inference_state) => {
+            println!("Model loaded successfully from path: {model_path}");
+            *STATE.lock().unwrap() = Ok(inference_state);
+            return Ok(());
+        }
+        Err(err) => {
+            println!("Failed to load model from path: {model_path}, error: {err}");
+            *STATE.lock().unwrap() = Err(err.clone());
+            return Err(err);
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
-pub extern "C" fn infer(left: &[u8; 128 * 128], right: &[u8; 128 * 128]) -> ModelOutput {
-    let start_time = std::time::Instant::now();
+pub extern "C" fn loadModel(path_ptr: *const c_char) -> ModelOutputResult {
+    let c_str = unsafe { CStr::from_ptr(path_ptr) };
+
+    let c_str_str = c_str.to_str().unwrap_or_default();
+    let decoded = urlencoding::decode(c_str_str).unwrap().to_string();
+    let file_path = Path::new(&decoded);
+
+    // Remove file extension for model loading
+    let file_stem = file_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .split('.')
+        .next()
+        .unwrap_or_default();
+    let model_path = file_path.with_file_name(file_stem);
+
+    println!("Loading model from path: {:?} ({:?})", c_str, model_path);
+
+    match load_model(model_path.to_str().unwrap_or_default()) {
+        Ok(()) => ModelOutputResult::from_output(ModelOutput::default()),
+        Err(err) => ModelOutputResult::from_error(err),
+    }
+}
+
+pub fn run_inference(
+    left: &[u8; 128 * 128],
+    right: &[u8; 128 * 128],
+) -> Result<ModelOutput, String> {
+    // let start_time = std::time::Instant::now();
     let device = Default::default();
 
-    let state = get_inference_state();
-    let mut left_frames = get_left_eye_frames();
-    let mut right_frames = get_right_eye_frames();
+    let state = STATE.lock().unwrap();
+    if let Err(err) = state.as_ref() {
+        return Err(err.clone());
+    }
+
+    let state = state.as_ref().unwrap();
+    let mut left_frames = LEFT_EYE_FRAMES.lock().unwrap();
+    let mut right_frames = RIGHT_EYE_FRAMES.lock().unwrap();
 
     left_frames.push_back(equalize_histogram(left));
     right_frames.push_back(equalize_histogram(right));
@@ -170,14 +272,47 @@ pub extern "C" fn infer(left: &[u8; 128 * 128], right: &[u8; 128 * 128]) -> Mode
     //     1.0 / (std::time::Instant::now() - start_time).as_secs_f32()
     // );
 
-    println!("Model output: [{:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}]", output[0], output[1], output[2], output[3], output[4], output[5]);
+    // println!(
+    //     "Model output: [{:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}, {:.3}]",
+    //     output[0],
+    //     output[1],
+    //     output[2],
+    //     output[3],
+    //     output[4],
+    //     output[5],
+    //     output[6],
+    //     output[7],
+    //     output[8],
+    //     output[9]
+    // );
 
-    ModelOutput {
+    Ok(ModelOutput {
         pitch_l: output[0],
         yaw_l: output[1],
         blink_l: output[2],
-        pitch_r: output[3],
-        yaw_r: output[4],
-        blink_r: output[5],
+        eyebrow_l: output[3],
+        eyewide_l: output[4],
+        pitch_r: output[5],
+        yaw_r: output[6],
+        blink_r: output[7],
+        eyebrow_r: output[8],
+        eyewide_r: output[9],
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn infer(left: &[u8; 128 * 128], right: &[u8; 128 * 128]) -> ModelOutputResult {
+    match run_inference(left, right) {
+        Ok(output) => ModelOutputResult::from_output(output),
+        Err(err) => ModelOutputResult::from_error(err),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn freeModelOutputResult(result: ModelOutputResult) {
+    if result.is_error() {
+        unsafe {
+            let _ = CString::from_raw(result.value.error_message);
+        }
     }
 }

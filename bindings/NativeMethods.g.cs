@@ -18,8 +18,14 @@ namespace babble_model.Net.Sys
 
 
 
+        [DllImport(__DllName, EntryPoint = "loadModel", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern ModelOutputResult loadModel(byte* path_ptr);
+
         [DllImport(__DllName, EntryPoint = "infer", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        public static extern ModelOutput infer(void/* byte[] */* left, void/* byte[] */* right);
+        public static extern ModelOutputResult infer(void/* byte[] */* left, void/* byte[] */* right);
+
+        [DllImport(__DllName, EntryPoint = "freeModelOutputResult", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void freeModelOutputResult(ModelOutputResult result);
 
 
     }
@@ -30,9 +36,29 @@ namespace babble_model.Net.Sys
         public float pitch_l;
         public float yaw_l;
         public float blink_l;
+        public float eyebrow_l;
+        public float eyewide_l;
         public float pitch_r;
         public float yaw_r;
         public float blink_r;
+        public float eyebrow_r;
+        public float eyewide_r;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public unsafe partial struct ModelOutputResult
+    {
+        [MarshalAs(UnmanagedType.U1)] public bool is_error;
+        public ModelOutputValue value;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    public unsafe partial struct ModelOutputValue
+    {
+        [FieldOffset(0)]
+        public ModelOutput model_output;
+        [FieldOffset(0)]
+        public byte* error_message;
     }
 
 

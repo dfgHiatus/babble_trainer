@@ -7,8 +7,6 @@ use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
 use log::{debug, info};
 
-const FLAG_GOOD_DATA: u32 = 1 << 30;
-
 #[derive(Debug, Clone)]
 struct FileData {
     routine_pitch: f32,
@@ -36,10 +34,6 @@ struct FileData {
 }
 
 impl FileData {
-    pub fn is_safe_frame(&self) -> bool {
-        self.routine_state & 67108864 != 0
-    }
-
     pub fn from_reader(rdr: &mut impl std::io::Read) -> Result<Self, std::io::Error> {
         Ok(FileData {
             routine_pitch: rdr.read_f32::<LittleEndian>()?,

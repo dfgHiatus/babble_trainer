@@ -2,7 +2,7 @@ use burn::{Tensor, data::dataloader::batcher::Batcher, prelude::Backend};
 
 use crate::{ImageData, ImageLabel};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Copy)]
 pub struct DatasetInfo {
     pub pitch_min_l: f32,
     pub pitch_max_l: f32,
@@ -63,49 +63,74 @@ fn apply_blur(image: [ImageData; 8], _max_kernel_size: i32) -> [ImageData; 8] {
 
 impl<B: Backend> Batcher<B, WindowedFrame, EyeDataBatch<B>> for EyeDataBatcher {
     fn batch(&self, mut items: Vec<WindowedFrame>, device: &B::Device) -> EyeDataBatch<B> {
+        fn handle_data(
+            pitch: f32,
+            yaw: f32,
+            lid: f32,
+            squint: f32,
+            widen: f32,
+            angry: f32,
+        ) -> [f32; 5] {
+            let lid_closed = lid < 0.5;
+
+            let mut norm_pitch = ((pitch + 45.0) / 90.0).clamp(0.0, 1.0);
+            let mut norm_yaw = ((yaw + 45.0) / 90.0).clamp(0.0, 1.0);
+
+            if lid_closed || squint > 0.5 || widen > 0.5 || angry > 0.5 {
+                norm_pitch = 0.5;
+                norm_yaw = 0.5;
+            }
+
+            // Order is [pitch, yaw, lid_closed, eyebrow, eyewide]
+
+            return [
+                norm_pitch,
+                norm_yaw,
+                if lid_closed {
+                    1.0
+                } else if squint > 0.5 {
+                    0.5
+                } else {
+                    0.0
+                },
+                if angry > 0.5 { 1.0 } else { 0.0 },
+                if widen > 0.5 { 1.0 } else { 0.0 },
+            ];
+        }
+
         // Pull these out first so that we can pull the image buffers out without copies
         let targets = items
             .iter()
             .map(|item| {
-                let left_lid_closed = item.label.routine_left_lid < 0.5;
-                let right_lid_closed = item.label.routine_right_lid < 0.5;
-
-                // ...Python trainer has this code but I'm prettyyyy sure it just gets overwritten 10 lines down
-                // let norm_pitch_r = (item.label.right_eye_pitch - self.dataset_info.pitch_min_r)
-                //     / (self.dataset_info.pitch_max_r - self.dataset_info.pitch_min_r);
-                // let norm_yaw_r = (item.label.right_eye_yaw - self.dataset_info.yaw_min_r)
-                //     / (self.dataset_info.yaw_max_r - self.dataset_info.yaw_min_r);
-
-                // let norm_pitch_l = (item.label.left_eye_pitch - self.dataset_info.pitch_min_l)
-                //     / (self.dataset_info.pitch_max_l - self.dataset_info.pitch_min_l);
-                // let norm_yaw_l = (item.label.left_eye_yaw - self.dataset_info.yaw_min_l)
-                //     / (self.dataset_info.yaw_max_l - self.dataset_info.yaw_min_l);
-
-                let norm_pitch_r = ((item.label.right_eye_pitch + 45.0) / 90.0).clamp(0.0, 1.0);
-                let norm_yaw_r = ((item.label.right_eye_yaw + 45.0) / 90.0).clamp(0.0, 1.0);
-                let norm_pitch_l = ((item.label.left_eye_pitch + 45.0) / 90.0).clamp(0.0, 1.0);
-                let norm_yaw_l = ((item.label.left_eye_yaw + 45.0) / 90.0).clamp(0.0, 1.0);
-
-                let left_values = if left_lid_closed {
-                    [0.5, 0.5, 1.0]
-                } else {
-                    [norm_pitch_l, norm_yaw_l, 0.0]
-                };
-
-                let right_values = if right_lid_closed {
-                    [0.5, 0.5, 1.0]
-                } else {
-                    [norm_pitch_r, norm_yaw_r, 0.0]
-                };
+                let left_values = handle_data(
+                    item.label.left_eye_pitch,
+                    item.label.left_eye_yaw,
+                    item.label.routine_left_lid,
+                    item.label.routine_squint,
+                    item.label.routine_widen,
+                    item.label.routine_brow_angry,
+                );
+                let right_values = handle_data(
+                    item.label.right_eye_pitch,
+                    item.label.right_eye_yaw,
+                    item.label.routine_right_lid,
+                    item.label.routine_squint,
+                    item.label.routine_widen,
+                    item.label.routine_brow_angry,
+                );
 
                 return Tensor::<B, 1>::from_data(
                     [
                         left_values[0],
                         left_values[1],
                         left_values[2],
+                        left_values[3],
+                        left_values[4],
                         right_values[0],
                         right_values[1],
                         right_values[2],
+                        right_values[3],
+                        right_values[4],
                     ],
                     device,
                 );

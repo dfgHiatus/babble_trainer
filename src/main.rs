@@ -16,31 +16,35 @@ use burn::{
     module::Module,
     optim::AdamConfig,
     prelude::Config,
-    record::CompactRecorder,
+    record::SensitiveCompactRecorder,
     tensor::backend::AutodiffBackend,
     train::{Learner, SupervisedTraining, metric::LossMetric},
 };
 use log::{error, info};
+use time::{UtcDateTime, macros::format_description};
 
 use crate::frame_correlator::{AlignedFrame, ImageToTensor, align_frames, create_dataset};
 
 mod frame_correlator;
 
-fn create_artifact_dir(artifact_dir: &str) {
-    // Remove existing artifacts before to get an accurate learner summary
-    std::fs::remove_dir_all(artifact_dir).ok();
-    std::fs::create_dir_all(artifact_dir).ok();
+fn create_artifact_dir(model_name: &str) {
+    let path = std::path::Path::new(model_name).parent();
+
+    if let Some(parent) = path {
+        std::fs::remove_dir_all(parent).ok();
+        std::fs::create_dir_all(parent).ok();
+    }
 }
 
 pub fn train<B: AutodiffBackend>(
-    artifact_dir: &str,
+    model_name: &str,
     config: TrainingConfig,
     device: B::Device,
     frames: Vec<AlignedFrame>,
 ) {
-    create_artifact_dir(artifact_dir);
+    create_artifact_dir(format!("{model_name}/training").as_str());
     config
-        .save(format!("{artifact_dir}/config.json"))
+        .save(format!("{model_name}_config.json"))
         .expect("Config should be saved successfully");
 
     B::seed(&device, config.seed);
@@ -49,6 +53,10 @@ pub fn train<B: AutodiffBackend>(
 
     let batcher = EyeDataBatcher {
         training: true,
+        dataset_info,
+    };
+    let test_batcher = EyeDataBatcher {
+        training: false,
         dataset_info,
     };
 
@@ -68,23 +76,26 @@ pub fn train<B: AutodiffBackend>(
     let dataset_train = get_data(frames.clone(), 0, 8);
     let dataset_test = get_data(frames, 8, 10);
 
-    let dataloader_train = DataLoaderBuilder::new(batcher.clone())
+    let dataloader_train = DataLoaderBuilder::new(batcher)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(dataset_train);
 
-    let dataloader_test = DataLoaderBuilder::new(batcher)
+    let dataloader_test = DataLoaderBuilder::new(test_batcher)
         .batch_size(config.batch_size)
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(dataset_test);
 
-    let training = SupervisedTraining::new(artifact_dir, dataloader_train, dataloader_test)
-        .metrics((LossMetric::new(),))
-        .with_file_checkpointer(CompactRecorder::new())
-        .num_epochs(config.num_epochs)
-        .summary();
+    let training = SupervisedTraining::new(
+        format!("{model_name}_training"),
+        dataloader_train,
+        dataloader_test,
+    )
+    .metrics((LossMetric::new(),))
+    .num_epochs(config.num_epochs)
+    .summary();
 
     let model = config.model.init::<B>(&device);
     let result = training.launch(Learner::new(
@@ -95,7 +106,7 @@ pub fn train<B: AutodiffBackend>(
 
     result
         .model
-        .save_file(format!("{artifact_dir}/model"), &CompactRecorder::new())
+        .save_file(model_name, &SensitiveCompactRecorder::new())
         .expect("Trained model should be saved successfully");
 }
 
@@ -109,41 +120,45 @@ fn main() {
     let device = Default::default();
     let mut reader = FileReader::new();
 
-    let aligned_frames = match reader.read_capture_file("./data/user_cal.bin", false, true, 0, 0) {
-        Ok(_) => {
-            info!("Finished processing capture file");
+    let aligned_frames =
+        match reader.read_capture_file("./data/ModelData/user_cal.bin", false, true, 0, 0) {
+            Ok(_) => {
+                info!("Finished processing capture file");
 
-            let mut left_frames: Vec<(u64, ImageData)> = reader
-                .left_eye_frames
-                .iter()
-                .map(|(ts, img)| (*ts, img.clone()))
-                .collect();
-            let mut right_frames: Vec<(u64, ImageData)> = reader
-                .right_eye_frames
-                .iter()
-                .map(|(ts, img)| (*ts, img.clone()))
-                .collect();
-            let mut label_frames: Vec<(u64, ImageLabel)> = reader
-                .label_frames
-                .iter()
-                .map(|(ts, label)| (*ts, label.clone()))
-                .collect();
+                let mut left_frames: Vec<(u64, ImageData)> = reader
+                    .left_eye_frames
+                    .iter()
+                    .map(|(ts, img)| (*ts, img.clone()))
+                    .collect();
+                let mut right_frames: Vec<(u64, ImageData)> = reader
+                    .right_eye_frames
+                    .iter()
+                    .map(|(ts, img)| (*ts, img.clone()))
+                    .collect();
+                let mut label_frames: Vec<(u64, ImageLabel)> = reader
+                    .label_frames
+                    .iter()
+                    .map(|(ts, label)| (*ts, label.clone()))
+                    .collect();
 
-            left_frames.sort_by_key(|(ts, _)| *ts);
-            right_frames.sort_by_key(|(ts, _)| *ts);
-            label_frames.sort_by_key(|(ts, _)| *ts);
+                left_frames.sort_by_key(|(ts, _)| *ts);
+                right_frames.sort_by_key(|(ts, _)| *ts);
+                label_frames.sort_by_key(|(ts, _)| *ts);
 
-            align_frames(left_frames, right_frames, label_frames)
-        }
-        Err(e) => {
-            error!("Failed to read capture file: {e}");
-            return;
-        }
-    };
+                align_frames(left_frames, right_frames, label_frames)
+            }
+            Err(e) => {
+                error!("Failed to read capture file: {e}");
+                return;
+            }
+        };
 
+    // Name by timestamp
+    let timestamp = UtcDateTime::now();
+    let format = format_description!("[year]-[month]-[day] [hour]-[minute]-[second]");
     train::<AutodiffBackend>(
-        "./artifacts",
-        TrainingConfig::new(MultiInputMergedMicroChadConfig::new(3), AdamConfig::new()),
+        &format!("./artifacts/{}", timestamp.format(format).unwrap()),
+        TrainingConfig::new(MultiInputMergedMicroChadConfig::new(5), AdamConfig::new()),
         device,
         aligned_frames,
     );
