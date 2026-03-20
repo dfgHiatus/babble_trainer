@@ -197,9 +197,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/babble_trainer.win.${{ github.event.inputs.version-number }}.tar.xz
-            artifacts/babble_trainer.linux.x64.${{ github.event.inputs.version-number }}.tar.xz
-            artifacts/babble_trainer.linux.arm64.${{ github.event.inputs.version-number }}.tar.xz
+            artifacts/babble_trainer.win.tar.xz
+            artifacts/babble_trainer.linux.x64.tar.xz
+            artifacts/babble_trainer.linux.arm64.tar.xz
           tag_name: ${{ github.event.inputs.version-number }}
           name: ${{ steps.release-name.outputs.name }}
           prerelease: ${{ github.event.inputs.publish-pre-release }}
