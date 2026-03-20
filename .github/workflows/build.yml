@@ -167,9 +167,8 @@ jobs:
           VERSION: ${{ github.event.inputs.version-number }}
         run: |
           cd artifacts
-          mv babble_trainer.win.tar.xz "babble_trainer.win.${VERSION}.tar.xz"
-          mv babble_trainer.x64.tar.xz "babble_trainer.linux.x64.${VERSION}.tar.xz"
-          mv babble_trainer.arm64.tar.xz "babble_trainer.linux.arm64.${VERSION}.tar.xz"
+          mv babble_trainer.x64.tar.xz "babble_trainer.linux.x64.tar.xz"
+          mv babble_trainer.arm64.tar.xz "babble_trainer.linux.arm64.tar.xz"
 
       - name: Set dynamic release name
         id: release-name
