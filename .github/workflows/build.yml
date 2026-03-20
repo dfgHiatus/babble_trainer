@@ -70,7 +70,7 @@ jobs:
       - name: Create tarball
         run: |
           cd target/${{ matrix.arch }}/release
-          tar -cJf ../../../${{ matrix.result }} babble_trainer
+          tar -cJf ../../../${{ matrix.result }} babble_trainer libbabble_model.so
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -111,7 +111,7 @@ jobs:
       - name: Create tarball
         run: |
           cd target/x86_64-pc-windows-msvc/release
-          tar -cJf ../../../babble_trainer.win.tar.xz babble_trainer.exe
+          tar -cJf ../../../babble_trainer.win.tar.xz babble_trainer.exe babble_model.dll
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -144,12 +144,6 @@ jobs:
             exit 1
           fi
 
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: babble_trainer.exe
-          path: ./artifacts
-
       - name: Download Windows tarball artifact
         uses: actions/download-artifact@v4
         with:
@@ -173,7 +167,6 @@ jobs:
           VERSION: ${{ github.event.inputs.version-number }}
         run: |
           cd artifacts
-          mv babble_trainer.exe "babble_trainer.${VERSION}.exe"
           mv babble_trainer.win.tar.xz "babble_trainer.win.${VERSION}.tar.xz"
           mv babble_trainer.x64.tar.xz "babble_trainer.linux.x64.${VERSION}.tar.xz"
           mv babble_trainer.arm64.tar.xz "babble_trainer.linux.arm64.${VERSION}.tar.xz"
@@ -204,7 +197,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/babble_trainer.${{ github.event.inputs.version-number }}.exe
             artifacts/babble_trainer.win.${{ github.event.inputs.version-number }}.tar.xz
             artifacts/babble_trainer.linux.x64.${{ github.event.inputs.version-number }}.tar.xz
             artifacts/babble_trainer.linux.arm64.${{ github.event.inputs.version-number }}.tar.xz
