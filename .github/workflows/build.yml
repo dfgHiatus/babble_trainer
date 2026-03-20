@@ -1,0 +1,217 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish-release:
+        description: 'Publish Release'
+        type: boolean
+        default: false
+      publish-pre-release:
+        description: 'Mark as Pre-Release'
+        type: boolean
+        default: false
+      version-number:
+        description: 'Version Number for Release'
+        type: string
+      release-name-info:
+        description: 'Additional info to put at the end of the release name'
+        type: string
+        required: false
+      release-notes:
+        description: 'Release notes, auto generated if not given'
+        type: string
+        required: false
+
+jobs:
+  build-linux:
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      matrix:
+        include:
+          - { result: babble_trainer.x64.tar.xz, runs-on: ubuntu-22.04, upload-path: target/release/babble_trainer, arch: x86_64-unknown-linux-gnu }
+          - { result: babble_trainer.arm64.tar.xz, runs-on: ubuntu-22.04-arm, upload-path: target/release/babble_trainer, arch: aarch64-unknown-linux-gnu }
+
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - name: Checkout latest
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.arch }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Build release
+        run: |
+          cargo build --release --target ${{ matrix.arch }}
+
+      - name: Strip binary
+        run: strip target/${{ matrix.arch }}/release/babble_trainer
+
+      - name: Create tarball
+        run: |
+          cd target/${{ matrix.arch }}/release
+          tar -cJf ../../../../${{ matrix.result }} babble_trainer
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.result }}
+          path: ${{ matrix.result }}
+
+  build-windows-x64:
+    defaults:
+      run:
+        shell: bash
+
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout latest
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-x86_64-pc-windows-msvc-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Create tarball
+        run: |
+          cd target/x86_64-pc-windows-msvc/release
+          tar -cJf ../../../../babble_trainer.win.tar.xz babble_trainer.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: babble_trainer.exe
+          path: target/x86_64-pc-windows-msvc/release/babble_trainer.exe
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: babble_trainer.win.tar.xz
+          path: babble_trainer.win.tar.xz
+
+  publish-release:
+    needs: [build-linux, build-windows-x64]
+    if: ${{ github.event.inputs.publish-release == 'true' }}
+    defaults:
+      run:
+        shell: bash
+
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Validate version number exists
+        run: |
+          if [ -z "${{ github.event.inputs.version-number }}" ]; then
+            echo "Version number is required for release"
+            exit 1
+          fi
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: babble_trainer.exe
+          path: ./artifacts
+
+      - name: Download Windows tarball artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: babble_trainer.win.tar.xz
+          path: ./artifacts
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: babble_trainer.x64.tar.xz
+          path: ./artifacts
+          pattern: babble_trainer.x64.tar.xz
+
+      - name: Download Linux ARM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: babble_trainer.arm64.tar.xz
+          path: ./artifacts
+          pattern: babble_trainer.arm64.tar.xz
+
+      - name: Rename artifacts
+        env:
+          VERSION: ${{ github.event.inputs.version-number }}
+        run: |
+          cd artifacts
+          mv babble_trainer.exe "babble_trainer.${VERSION}.exe"
+          mv babble_trainer.win.tar.xz "babble_trainer.win.${VERSION}.tar.xz"
+          mv babble_trainer.x64.tar.xz "babble_trainer.linux.x64.${VERSION}.tar.xz"
+          mv babble_trainer.arm64.tar.xz "babble_trainer.linux.arm64.${VERSION}.tar.xz"
+
+      - name: Set dynamic release name
+        id: release-name
+        run: |
+          if [[ -z "${{ github.event.inputs.release-name-info }}" ]]; then
+            echo "name=${{ github.event.inputs.version-number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.inputs.version-number }} - ${{ github.event.inputs.release-name-info }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set release body or generate notes
+        id: release-body
+        run: |
+          if [[ -z "${{ github.event.inputs.release-notes }}" ]]; then
+            echo "generate_notes=true" >> "$GITHUB_OUTPUT"
+            echo "body=" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate_notes=false" >> "$GITHUB_OUTPUT"
+            echo "body<<EOF" >> "$GITHUB_OUTPUT"
+            echo "${{ github.event.inputs.release-notes }}" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/babble_trainer.${{ github.event.inputs.version-number }}.exe
+            artifacts/babble_trainer.win.${{ github.event.inputs.version-number }}.tar.xz
+            artifacts/babble_trainer.linux.x64.${{ github.event.inputs.version-number }}.tar.xz
+            artifacts/babble_trainer.linux.arm64.${{ github.event.inputs.version-number }}.tar.xzz
+          tag_name: ${{ github.event.inputs.version-number }}
+          name: ${{ steps.release-name.outputs.name }}
+          prerelease: ${{ github.event.inputs.publish-pre-release }}
+          body: ${{ steps.release-body.outputs.body }}
+          generate_release_notes: ${{ steps.release-body.outputs.generate_notes }}
